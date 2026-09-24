@@ -94,6 +94,14 @@ class DistrictState(BaseModel):
     max_increase_pct: float | None = None  # active cap on renewal increase, e.g. 0.0 = freeze
     # Tourism: dwellings (agent units) used as tourist flats; not available to residents.
     tourist_units: int = 0
+    # Rental-market supply (agent units). housing_units = owner_units + rental_units
+    # + seasonal_units + tourist_units. Renters can only take vacant rental units.
+    owner_units: int = 0  # owner-occupied stock (occupied or for sale)
+    rental_units: int = 0  # long-term rental stock (occupied by renters or vacant)
+    seasonal_units: int = 0  # short/seasonal lets (lloguer de temporada): not for residents
+    renovating_units: int = 0  # off-market while renovating (counted inside rental_units)
+    quality: float = 1.0  # rental stock maintenance level 0..1 (decays when rents are capped)
+    construction_pipeline: list[tuple[int, int]] = Field(default_factory=list)  # (ready_tick, units)
     # Local commerce (real-count scale, not agent units): open shops and last month's revenue.
     shops_open: int = 0
     shop_revenue_monthly: float = 0.0
@@ -142,6 +150,18 @@ class CommuteMode(StrEnum):
     CAR = "car"  # car or motorbike
     BIKE = "bike"
     WALK = "walk"
+
+
+class LandlordAction(StrEnum):
+    RELET = "relet"  # rent it again long-term
+    SELL = "sell"  # sell to an owner-occupier: leaves the rental stock
+    SEASONAL = "seasonal"  # switch to seasonal/short lets (often outside long-term caps)
+    RENOVATE = "renovate"  # take it off the market for a few months, then relet
+
+
+class LandlordType(StrEnum):
+    SMALL = "small"  # individual owning 1-2 flats (most Barcelona landlords)
+    LARGE = "large"  # company / large holder
 
 
 class ShoppingPlace(StrEnum):
@@ -252,6 +272,29 @@ def question_key(agent_id: int, name: str) -> str:
     return f"{agent_id}:{name}"
 
 
+class Vacancy(BaseModel):
+    """A long-term rental unit that became free this tick: its landlord decides what to do."""
+
+    vacancy_id: int  # unique per run
+    tick: int
+    district: DistrictId
+    landlord_type: LandlordType
+    last_rent: float  # rent the previous tenant paid
+    tenant_years: float  # how long the previous tenant stayed
+
+
+class LandlordDecision(BaseModel):
+    vacancy_id: int
+    tick: int
+    district: DistrictId
+    action: LandlordAction
+    confidence: float
+    action_probs: dict[str, float] = Field(default_factory=dict)
+
+
+LANDLORD_QUESTION = "landlord_action"
+
+
 class DecisionRequest(BaseModel):
     """One HTTP call to Jev: one state, many typed questions (1..K agents x QUESTION_NAMES).
 
@@ -262,7 +305,8 @@ class DecisionRequest(BaseModel):
 
     request_id: str
     tick: int
-    agent_ids: list[int]
+    agent_ids: list[int]  # resident ids, or vacancy ids when kind == "landlord"
+    kind: Literal["resident", "landlord"] = "resident"
     state: dict[str, Any] | list[Any] | str
     questions: dict[str, dict[str, Any]]
     mock_priors: dict[str, dict[str, float]] = Field(default_factory=dict)
@@ -311,6 +355,7 @@ class TickDelta:
     job_matches: int = 0
     arrivals: list[Agent] = field(default_factory=list)  # households that moved into BCN
     departures: list[int] = field(default_factory=list)  # agent ids that left BCN
+    vacancies: list[Vacancy] = field(default_factory=list)  # rental units freed this tick
 
 
 # --- Jev adapter ---------------------------------------------------------------------------
@@ -507,6 +552,23 @@ class EventParams(BaseModel):
     #                                   this many days after it starts (not all on day one)
 
 
+class RentalSupplyParams(BaseModel):
+    """Landlord and construction behaviour. Off (legacy behaviour) when enabled=False."""
+
+    enabled: bool = False
+    large_landlord_share: float = 0.15  # share of rental units owned by large holders
+    seasonal_rent_multiple: float = 1.35  # seasonal let monthly income vs long-term market rent
+    seasonal_capped: bool = False  # does the rent cap also bind seasonal lets?
+    renovation_ticks: int = 90
+    renovation_quality_gain: float = 0.3
+    quality_decay_capped_monthly: float = 0.01  # quality loss per month when rent is capped
+    quality_recovery_monthly: float = 0.005  # recovery per month otherwise (up to 1.0)
+    construction_monthly_share: float = 0.0006  # new units per month as share of stock at base
+    construction_rent_elasticity: float = 2.0  # response to expected rent vs initial rent
+    construction_lag_ticks: int = 540  # ~18 months from decision to completion
+    construction_rental_share: float = 0.4  # share of new units entering the rental stock
+
+
 class MigrationParams(BaseModel):
     """Households arriving in / leaving Barcelona. Arrivals are new agents (new ids)."""
 
@@ -531,6 +593,7 @@ class Scenario(BaseModel):
     events: EventParams = Field(default_factory=EventParams)
     policies: list[Policy] = Field(default_factory=list)
     migration: MigrationParams = Field(default_factory=MigrationParams)
+    rental_supply: RentalSupplyParams = Field(default_factory=RentalSupplyParams)
     prompt: PromptParams = Field(default_factory=PromptParams)
 
 
@@ -557,6 +620,13 @@ class DistrictSnapshot(BaseModel):
     online_share: float = 0.0  # residents whose main shopping is online
     arrivals: int = 0  # today
     departures: int = 0  # today
+    owner_units: int = 0
+    rental_units: int = 0
+    seasonal_units: int = 0
+    rental_vacancy_rate: float = 0.0  # vacant long-term rental units / rental units
+    quality: float = 1.0
+    new_units_completed: int = 0  # today
+    below_market_share: float = 0.0  # renters paying < 85% of current market rent (lock-in)
 
 
 class MoveRecord(BaseModel):
@@ -585,6 +655,7 @@ class TickRecord(BaseModel):
     usage_tick: Usage  # usage_tick.models_seen = exact model versions that answered this tick
     usage_total: Usage
     arrivals: list[AgentSnapshot] = Field(default_factory=list)  # new households (new dots)
+    landlord_actions_by_kind: dict[str, int] = Field(default_factory=dict)
     departures: list[int] = Field(default_factory=list)  # agent ids that left the city
 
 

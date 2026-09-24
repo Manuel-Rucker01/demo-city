@@ -1,0 +1,6 @@
+extends: base.yaml
+name: base_2y
+description: Baseline over two years with landlord supply decisions (relet / sell / seasonal / renovate) and construction enabled.
+ticks: 730
+rental_supply:
+  enabled: true

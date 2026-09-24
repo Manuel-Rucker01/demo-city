@@ -1,0 +1,14 @@
+extends: base_2y.yaml
+name: rent_cap_citywide_2y
+description: Citywide cap on new-lease rents at their initial level from day 30, renewals frozen, over two years with landlord supply decisions and construction. Seasonal lets are not capped (as under Catalonia's 2023 rules until 2025).
+policies:
+  - {type: rent_cap, district: ciutat_vella, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: eixample, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: sants_montjuic, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: les_corts, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: sarria_sant_gervasi, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: gracia, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: horta_guinardo, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: nou_barris, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: sant_andreu, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
+  - {type: rent_cap, district: sant_marti, start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0}
