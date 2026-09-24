@@ -177,6 +177,66 @@ def test_unknown_key_detected_after_extends_merge(tmp_path):
         load_scenario(child)
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "scenarios/base.yaml",
+        "scenarios/rent_cap_gracia.yaml",
+        "scenarios/hut_ban_2028.yaml",
+        "scenarios/new_metro_line.yaml",
+        "scenarios/low_emission_zone.yaml",
+        "scenarios/combo_policies.yaml",
+    ],
+)
+def test_every_scenario_yaml_loads_and_validates(path):
+    scenario = load_scenario(path)
+    assert scenario.name
+    assert scenario.ticks > 0
+    assert scenario.n_agents > 0
+    # `districts: None` (unset, inherited from base.yaml) means "every district in the data
+    # file" - this expansion's scenarios shouldn't narrow it.
+    assert scenario.districts is None
+
+
+def test_hut_ban_2028_policy_fields():
+    scenario = load_scenario("scenarios/hut_ban_2028.yaml")
+    assert len(scenario.policies) == 1
+    policy = scenario.policies[0]
+    assert policy.type == "tourist_flat_ban"
+    assert policy.districts == "all"
+    assert policy.start_tick == 30
+    assert policy.end_tick == 365
+    assert policy.reduction == 1.0
+
+
+def test_new_metro_line_policy_fields():
+    scenario = load_scenario("scenarios/new_metro_line.yaml")
+    assert len(scenario.policies) == 1
+    policy = scenario.policies[0]
+    assert policy.type == "new_transit_line"
+    assert set(policy.districts) == {"sant_andreu", "nou_barris", "sants_montjuic"}
+    assert policy.start_tick == 60
+    assert policy.transit_boost == 0.2
+
+
+def test_low_emission_zone_policy_fields():
+    scenario = load_scenario("scenarios/low_emission_zone.yaml")
+    assert len(scenario.policies) == 1
+    policy = scenario.policies[0]
+    assert policy.type == "low_emission_zone"
+    assert set(policy.districts) == {"ciutat_vella", "eixample"}
+    assert policy.start_tick == 30
+    assert policy.car_cost_monthly == 60.0
+
+
+def test_combo_policies_has_both_rent_cap_and_hut_ban():
+    scenario = load_scenario("scenarios/combo_policies.yaml")
+    types_present = {p.type for p in scenario.policies}
+    assert types_present == {"rent_cap", "tourist_flat_ban"}
+    rent_cap = next(p for p in scenario.policies if p.type == "rent_cap")
+    assert rent_cap.district == "gracia"
+
+
 def test_extends_key_itself_is_not_an_unknown_field(tmp_path):
     base = tmp_path / "base.yaml"
     base.write_text("name: base\n", encoding="utf-8")

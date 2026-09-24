@@ -9,16 +9,55 @@ is needed, implement around it and say so in your report.
 ```
 apply_policies(world, scenario, tick)
 events    = detect_events(world, agents, tick, scenario.events, rng)      # events/triggers.py
-reqs      = build_requests(world, agents, events, tick, K)                  # prompts/state_builder.py
+events   += pending_arrived_events.pop(tick, [])                            # see "Migration" below
+reqs      = build_requests(world, agents, events, tick, K,
+                            max_districts_in_state=scenario.prompt.max_districts_in_state)
+                                                                              # prompts/state_builder.py
+                                                                              # (kwarg passed only if
+                                                                              #  the callable accepts it)
 responses = await backend.evaluate_many(reqs)                               # jev/
 decisions = parse_decisions(reqs, responses, scenario.jev.confidence_threshold)  # prompts/parse.py
 delta     = apply_decisions(world, agents, decisions, scenario, rng, tick)  # world/market.py
-changes   = daily_update(world, agents, scenario, tick, rng)                # world/market.py
+daily     = daily_update_ex(world, agents, scenario, tick, rng)             # world/market.py
+                                                                              # (TickDelta; falls back
+                                                                              #  to daily_update(...) ->
+                                                                              #  list[AgentChange], no
+                                                                              #  migration, if absent)
 writer.write_tick(TickRecord(...))                                           # runlog/
 ```
 
 One `numpy.random.Generator(seed)` owned by the engine is passed everywhere: same seed +
 same Jev answers => identical run.
+
+`scenario.districts` (`None` = every district in the data file) filters the `DistrictProfile`
+list loaded from `data_path` *before* population generation, so a scenario can simulate a
+subset of the 10 districts.
+
+### Migration (arrivals/departures)
+
+- `world/market.py`'s `daily_update_ex(world, agents, scenario, tick, rng) -> TickDelta` is the
+  single owner of both directions of migration: it calls `population.generator.spawn_arrivals`
+  for new households (sized from `scenario.migration.arrivals_per_month_per_1000`) and folds
+  them into `world`/`agents` itself (occupied units, filled jobs), returning them in
+  `TickDelta.arrivals`; agents whose `LEAVE_CITY` `MOVE` decision (from `apply_decisions`,
+  handled by `world/market.py`) or another migration rule sends them out of Barcelona have
+  `Agent.active` set to `False` and their id appended to `TickDelta.departures`.
+  `apply_decisions`'s own `TickDelta.departures` (from `LEAVE_CITY` decisions) and
+  `daily_update_ex`'s `TickDelta.departures` are concatenated by the engine into one
+  per-tick departures list.
+- The engine adds every `TickDelta.arrivals` agent to `agents_by_id` (a no-op if
+  `daily_update_ex` already inserted them - the operation is idempotent), then queues an
+  `EventKind.ARRIVED` event for each, for **tick + 1** (`pending_arrived_events`), so a new
+  household gets its first decision the day after it settles rather than the same day. That
+  queued event is merged into `detect_events`'s output at the top of the next tick.
+- `TickRecord.arrivals` is written as `list[AgentSnapshot]` (same shape as `agents.json`, so the
+  web view can add new dots) and `TickRecord.departures` as `list[int]` (ids only, so the web
+  view can remove dots). Departed agents are **not** deleted from `agents_by_id` - they stay
+  (with `active=False`) so later ticks can still reference their id if needed; `engine/snapshot.py`
+  excludes inactive agents from every resident-based figure.
+- If `market.daily_update_ex` doesn't exist yet (module still mid-change), the engine falls back
+  to the old `daily_update(world, agents, scenario, tick, rng) -> list[AgentChange]`: no
+  arrivals/departures happen, `TickRecord.arrivals`/`.departures` are empty for that run.
 
 ## Jev request shape (prompts -> jev)
 
@@ -42,6 +81,20 @@ runs/<run_id>/ticks.ndjson       one TickRecord per line
 runs/<run_id>/jev_calls.ndjson.gz   one CallRecord per line (replay cache)
 runs/<run_id>/summary.json       RunSummary (written at the end)
 ```
+
+`TickRecord` (per line of `ticks.ndjson`), fields relevant to district/migration reporting:
+- `districts: list[DistrictSnapshot]` - one row per district in `world.states`, built by
+  `engine/snapshot.build_district_snapshots`. Beyond the original rent/jobs/satisfaction
+  figures it now also carries `tourist_units`/`shops_open`/`shop_revenue_monthly` (copied
+  straight from `DistrictState`), `mode_share` (commute-mode distribution among active,
+  employed residents who have a `commute_mode` set - not all residents), `online_share`
+  (share of active residents whose `shopping_place` is `ONLINE`), and this tick's
+  `arrivals`/`departures` counts for that district. Inactive agents (`Agent.active is False`,
+  i.e. already left the city) are excluded from every resident-based figure.
+- `arrivals: list[AgentSnapshot]` - new households that moved into Barcelona this tick (see
+  "Migration" above); empty most ticks.
+- `departures: list[int]` - agent ids that left Barcelona this tick (via a `LEAVE_CITY` MOVE
+  decision or `daily_update_ex`'s own migration-out rule); empty most ticks.
 
 `jevcity export-web` copies meta/agents/ticks/summary (not jev_calls) to
 `web/public/runs/<run_id>/` and writes `web/public/runs/index.json`:

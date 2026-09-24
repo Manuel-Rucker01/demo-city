@@ -9,6 +9,7 @@ Collaborators are imported as modules (not individual functions) so tests can mo
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 import time
@@ -26,7 +27,10 @@ from jevcity.prompts import state_builder
 from jevcity.runlog import writer as runlog_writer
 from jevcity.types import (
     SIM_START_DATE,
+    Agent,
     AgentSnapshot,
+    Event,
+    EventKind,
     JevBackend,
     RunMeta,
     RunSummary,
@@ -69,6 +73,25 @@ def _usage_diff(after: Usage, before: Usage) -> Usage:
     )
 
 
+def _agent_snapshot(a: Agent) -> AgentSnapshot:
+    """One AgentSnapshot row (initial population write, and per-tick arrivals)."""
+    return AgentSnapshot(
+        id=a.id,
+        age=a.age,
+        occupation=a.occupation,
+        home=a.home,
+        employed=a.employed,
+        job_district=a.job_district,
+        wage_monthly=a.wage_monthly,
+        rent_monthly=a.rent_monthly,
+        satisfaction=a.satisfaction,
+        tenure=a.tenure,
+        children=a.children,
+        has_car=a.has_car,
+        commute_mode=a.commute_mode,
+    )
+
+
 def _is_budget_exceeded(exc: BaseException) -> bool:
     """Match jevcity.jev.errors.JevBudgetExceeded, imported lazily so a broken jev/ package
     (still under construction in parallel) doesn't break importing this module. Falls back to
@@ -93,6 +116,8 @@ async def run_simulation(
 
     rng = np.random.default_rng(scenario.seed)
     profiles = world_loader.load_profiles(scenario.data_path)
+    if scenario.districts is not None:
+        profiles = [p for p in profiles if p.id in scenario.districts]
     agents_list = generator.generate_population(profiles, scenario.n_agents, rng)
     agents_by_id = {a.id: a for a in agents_list}
     world = market.init_world(profiles, agents_list)
@@ -127,25 +152,27 @@ async def run_simulation(
     )
     writer.write_meta(meta)
 
-    agent_snapshots = [
-        AgentSnapshot(
-            id=a.id,
-            age=a.age,
-            occupation=a.occupation,
-            home=a.home,
-            employed=a.employed,
-            job_district=a.job_district,
-            wage_monthly=a.wage_monthly,
-            rent_monthly=a.rent_monthly,
-            satisfaction=a.satisfaction,
-            tenure=a.tenure,
-        )
-        for a in agents_list
-    ]
+    agent_snapshots = [_agent_snapshot(a) for a in agents_list]
     writer.write_agents(agent_snapshots)
 
     if backend is None:
         backend = jev.make_backend(scenario.jev, sink=writer)
+
+    # Robustness: build_requests gains an optional max_districts_in_state kwarg (prompts task,
+    # possibly not yet landed) - only pass it through if the callable in place accepts it, so
+    # this engine works against either signature.
+    build_requests_kwargs: dict[str, int] = {}
+    try:
+        sig = inspect.signature(state_builder.build_requests)
+    except (TypeError, ValueError):  # pragma: no cover - defensive, signature() rarely fails
+        sig = None
+    if sig is not None and "max_districts_in_state" in sig.parameters:
+        build_requests_kwargs["max_districts_in_state"] = scenario.prompt.max_districts_in_state
+
+    # ARRIVED events for households that spawned this tick are queued for the *next* tick (so
+    # they get a chance to settle in before their first decision) and merged into that tick's
+    # detected events.
+    pending_events: dict[int, list[Event]] = {}
 
     sim_start = date.fromisoformat(SIM_START_DATE)
     total_moves = 0
@@ -158,7 +185,12 @@ async def run_simulation(
             world.tick = tick
             market.apply_policies(world, scenario, tick)
             events = triggers.detect_events(world, agents_by_id, tick, scenario.events, rng)
-            reqs = state_builder.build_requests(world, agents_by_id, events, tick, k)
+            queued_events = pending_events.pop(tick, [])
+            if queued_events:
+                events = [*events, *queued_events]
+            reqs = state_builder.build_requests(
+                world, agents_by_id, events, tick, k, **build_requests_kwargs
+            )
 
             usage_before = backend.usage()
 
@@ -183,7 +215,31 @@ async def run_simulation(
                 decisions = []
 
             delta = market.apply_decisions(world, agents_by_id, decisions, scenario, rng, tick)
-            daily_changes = market.daily_update(world, agents_by_id, scenario, tick, rng)
+
+            # market.daily_update_ex (arrivals/departures/tourism/commerce) supersedes plain
+            # daily_update once the market task lands it; fall back to the old signature
+            # (list[AgentChange], no migration) until then, per docs/CONTRACTS.md.
+            daily_update_ex = getattr(market, "daily_update_ex", None)
+            if daily_update_ex is not None:
+                daily_delta = daily_update_ex(world, agents_by_id, scenario, tick, rng)
+                daily_changes = daily_delta.changes
+                new_arrivals = daily_delta.arrivals
+                new_departures = daily_delta.departures
+            else:
+                daily_changes = market.daily_update(world, agents_by_id, scenario, tick, rng)
+                new_arrivals = []
+                new_departures = []
+
+            # daily_update_ex owns adding new agents to world/market state; agents_by_id is
+            # only mutated here if it hasn't been already (idempotent either way).
+            for new_agent in new_arrivals:
+                agents_by_id.setdefault(new_agent.id, new_agent)
+                pending_events.setdefault(tick + 1, []).append(
+                    Event(agent_id=new_agent.id, kind=EventKind.ARRIVED)
+                )
+
+            arrival_ids = [a.id for a in new_arrivals]
+            departure_ids = [*delta.departures, *new_departures]
 
             usage_after = backend.usage()
             usage_tick = _usage_diff(usage_after, usage_before)
@@ -197,7 +253,9 @@ async def run_simulation(
                 logger.warning(msg)
                 warnings_list.append(msg)
 
-            districts = snapshot.build_district_snapshots(world, agents_by_id)
+            districts = snapshot.build_district_snapshots(
+                world, agents_by_id, arrivals=arrival_ids, departures=departure_ids
+            )
 
             events_by_kind: dict[str, int] = {}
             for ev in events:
@@ -221,6 +279,8 @@ async def run_simulation(
                 changes=[*delta.changes, *daily_changes],
                 usage_tick=usage_tick,
                 usage_total=usage_after,
+                arrivals=[_agent_snapshot(a) for a in new_arrivals],
+                departures=departure_ids,
             )
             writer.write_tick(tick_record)
 

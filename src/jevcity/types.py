@@ -105,11 +105,15 @@ class DistrictState(BaseModel):
 
     @property
     def vacant_units(self) -> int:
-        return self.housing_units - self.occupied_units
+        """Dwellings available to residents: tourist flats are part of housing_units but are
+        neither occupied by agents nor available to them."""
+        return max(self.housing_units - self.occupied_units - self.tourist_units, 0)
 
     @property
     def vacancy_rate(self) -> float:
-        return self.vacant_units / self.housing_units if self.housing_units else 0.0
+        """Share of the residential stock (excluding tourist flats) that is empty."""
+        residential = self.housing_units - self.tourist_units
+        return self.vacant_units / residential if residential > 0 else 0.0
 
     @property
     def job_vacancies(self) -> int:
@@ -478,12 +482,12 @@ class MarketParams(BaseModel):
     target_vacancy: float = 0.05
     renewal_increase_cap: float = 0.10  # max renewal increase absent policy
     job_match_daily_prob: float = 0.3  # per job_search decision, scaled by vacancies
-    spend_to_jobs: float = 0.00002  # new job slots per EUR of monthly shop revenue surplus
+    spend_to_jobs: float = 0.00002  # DEPRECATED: superseded by shop dynamics (jobs_per_shop)
     moving_cost: float = 1500.0
     tourism_rent_pressure: float = 0.5  # extra excess-demand per unit of tourist share of stock
     shop_close_threshold: float = 0.85  # monthly revenue / baseline below this -> shops close
     shop_open_threshold: float = 1.10  # above this -> shops open
-    shop_monthly_change_max: float = 0.02  # max share of shops opening/closing per month
+    shop_monthly_change_max: float = 0.005  # max share of shops opening/closing per month (~6%/yr)
     jobs_per_shop: float = 2.5  # real jobs per shop (converted to agent units)
     car_cost_monthly: float = 250.0  # baseline running cost of a commuting car
     public_transport_monthly: float = 40.0  # T-usual-like monthly pass
@@ -502,7 +506,7 @@ class EventParams(BaseModel):
 class MigrationParams(BaseModel):
     """Households arriving in / leaving Barcelona. Arrivals are new agents (new ids)."""
 
-    arrivals_per_month_per_1000: float = 1.5  # new households per 1,000 agents per month
+    arrivals_per_month_per_1000: float = 3.0  # new households per 1,000 agents per month
     leave_city_moving_cost: float = 3000.0
 
 

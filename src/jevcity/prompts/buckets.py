@@ -248,3 +248,49 @@ def commute_text(agent: Agent, district_id: str, world: World) -> str:
     dst_c = world.profiles[district_id].centroid
     dist = math.hypot(home_c[0] - dst_c[0], home_c[1] - dst_c[1])
     return "short" if dist < 0.03 else "long"
+
+
+def own_commute_length_text(agent: Agent, world: World) -> str:
+    """Bucketed commute length between the agent's own home and job district (reuses
+    commute_text with district_id=home, which already computes the job<->home distance)."""
+    return commute_text(agent, agent.home, world)
+
+
+# --- tourism / local commerce / transit boost / LEZ (new district-state fields) -----------
+
+
+def tourism_label(tourist_units: int, housing_units: int) -> str:
+    if housing_units <= 0 or tourist_units <= 0:
+        return "none"
+    share = tourist_units / housing_units
+    if share < 0.02:
+        return "none"
+    if share < 0.08:
+        return "low"
+    if share < 0.15:
+        return "high"
+    return "very high"
+
+
+def shops_trend_label(shops_open: int, baseline_shops: float) -> str:
+    """shops_open (current) vs baseline_shops (profile.shops at run start). 0 on either side
+    means the market model hasn't populated shop counts yet -> treat as "stable" (no signal)."""
+    if shops_open <= 0 or baseline_shops <= 0:
+        return "stable"
+    ratio = shops_open / baseline_shops
+    if ratio < 0.9:
+        return "closing"
+    if ratio > 1.1:
+        return "opening"
+    return "stable"
+
+
+def transit_bucket_text(transit_score: float, transit_boost: float) -> str:
+    """Transit label from profile.transit_score + state.transit_boost, with a short note
+    when a boost (new line) is in effect."""
+    label = transit_text(min(transit_score + transit_boost, 1.0))
+    return f"{label}, new metro line" if transit_boost > 0 else label
+
+
+def lez_note_text(car_cost_extra_monthly: float) -> str:
+    return f"low-emission zone: +€{round(car_cost_extra_monthly)}/mo by car"

@@ -25,6 +25,7 @@ from jevcity.types import (
     RunSummary,
     Scenario,
     Source,
+    TickRecord,
     Usage,
 )
 
@@ -55,7 +56,11 @@ def _settings(**overrides) -> ProviderSettings:
     return ProviderSettings(**base)
 
 
-def _make_run_dir(tmp_path, run_id: str, provider: str = "mock", ticks: int = 2):
+def _make_run_dir(
+    tmp_path, run_id: str, provider: str = "mock", ticks: int = 2, *,
+    tourist_units: int = 3, shops_open: int = 12, online_share: float = 0.2,
+    mode_share: dict | None = None, tick_arrivals: int = 1, tick_departures: int = 0,
+):
     scenario = Scenario(name="cmp-scenario", ticks=ticks, n_agents=5)
     profile = _profile("d1", "D1")
     writer = RunWriter(tmp_path / run_id)
@@ -65,15 +70,29 @@ def _make_run_dir(tmp_path, run_id: str, provider: str = "mock", ticks: int = 2)
             profiles=[profile], jev_provider=provider, jev_model_requested="jev-x",
         )
     )
-    writer.write_agents([
-        AgentSnapshot(id=0, age=30, occupation="mid_skill", home="d1", employed=True,
-                       job_district="d1", wage_monthly=2000.0, rent_monthly=900.0, satisfaction=0.6)
-    ])
+    agent_snapshot = AgentSnapshot(
+        id=0, age=30, occupation="mid_skill", home="d1", employed=True,
+        job_district="d1", wage_monthly=2000.0, rent_monthly=900.0, satisfaction=0.6,
+    )
+    writer.write_agents([agent_snapshot])
+    mode_share = mode_share if mode_share is not None else {"metro": 0.6, "car": 0.4}
     district = DistrictSnapshot(
         id="d1", avg_rent=1100.0, avg_paid_rent=1000.0, residents=5, vacancy_rate=0.04,
         unemployment_rate=0.08, jobs=20, filled_jobs=18, shop_revenue=50.0,
         avg_satisfaction=0.65, avg_rent_burden=0.32, rent_cap_active=False,
+        tourist_units=tourist_units, shops_open=shops_open, shop_revenue_monthly=5000.0,
+        mode_share=mode_share, online_share=online_share,
     )
+    for tick in range(1, ticks + 1):
+        writer.write_tick(
+            TickRecord(
+                tick=tick, date="2026-01-01", districts=[district], events_by_kind={},
+                actions_by_kind={}, gated_decisions=0, moves=[], changes=[],
+                usage_tick=Usage(), usage_total=Usage(),
+                arrivals=[agent_snapshot] if tick_arrivals else [],
+                departures=[0] if tick_departures else [],
+            )
+        )
     writer.write_summary(
         RunSummary(
             run_id=run_id, ticks=ticks, usage=Usage(requests=2, cost_usd=0.01, cost_source="estimated"),
@@ -272,6 +291,39 @@ def test_compare_prints_side_by_side_metrics(tmp_path, capsys):
     assert "avg_rent" in out
     assert "total_moves" in out
     assert "cost_usd" in out
+
+
+def test_compare_shows_new_world_expansion_metrics(tmp_path, capsys):
+    run_a = _make_run_dir(
+        tmp_path, "run-a", ticks=3, tourist_units=5, shops_open=10, online_share=0.3,
+        mode_share={"metro": 0.7, "car": 0.3}, tick_arrivals=1, tick_departures=0,
+    )
+    run_b = _make_run_dir(
+        tmp_path, "run-b", ticks=3, tourist_units=0, shops_open=8, online_share=0.1,
+        mode_share={"car": 1.0}, tick_arrivals=0, tick_departures=1,
+    )
+
+    code = cli.main(["compare", str(run_a), str(run_b)])
+    assert code == 0
+    out = capsys.readouterr().out
+
+    assert "tourist_units" in out
+    assert "shops_open" in out
+    assert "online_share" in out
+    assert "mode_share" in out
+    assert "metro:70%" in out  # run A's mode_share, largest share first
+    assert "car:100%" in out  # run B's mode_share
+    assert "total_arrivals" in out
+    assert "total_departures" in out
+
+    lines = out.splitlines()
+    arrivals_line = next(line for line in lines if line.strip().startswith("total_arrivals"))
+    departures_line = next(line for line in lines if line.strip().startswith("total_departures"))
+    arrivals_vals = arrivals_line.split()[1:]
+    departures_vals = departures_line.split()[1:]
+    # run A: 1 arrival/tick x 3 ticks = 3, 0 departures. run B: 0 arrivals, 1/tick x 3 = 3.
+    assert arrivals_vals == ["3", "0"]
+    assert departures_vals == ["0", "3"]
 
 
 def test_compare_requires_finished_runs(tmp_path, capsys):

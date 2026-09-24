@@ -1,0 +1,11 @@
+extends: base.yaml
+name: new_metro_line
+description: >-
+  A plausible L9/L10-style metro extension reaching Sant Andreu, Nou Barris and
+  Sants-Montjuïc from tick 60: transit_boost +0.2 in those three districts. Districts
+  and boost size are a plausible illustration, not a real Barcelona TMB project plan.
+policies:
+  - type: new_transit_line
+    districts: [sant_andreu, nou_barris, sants_montjuic]
+    start_tick: 60
+    transit_boost: 0.2

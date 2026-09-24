@@ -1,0 +1,18 @@
+extends: base.yaml
+name: combo_policies
+description: >-
+  Two housing-pressure policies together: the Gràcia rent cap (rent_cap_gracia.yaml) plus
+  the city-wide HUT phase-out (hut_ban_2028.yaml), to see whether easing tourist-flat
+  pressure changes what the rent cap alone does to Gràcia.
+policies:
+  - type: rent_cap
+    district: gracia
+    start_tick: 30
+    cap_pct_of_initial: 1.0
+    max_increase_pct: 0.0
+  - type: tourist_flat_ban
+    districts: all
+    start_tick: 30
+    end_tick: 365
+    reduction: 1.0
+    return_to_rental_share: 1.0

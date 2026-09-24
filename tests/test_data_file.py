@@ -12,7 +12,18 @@ ROOT = Path(__file__).resolve().parent.parent
 DISTRICTS_JSON = ROOT / "data" / "processed" / "districts.json"
 DISTRICTS_GEOJSON = ROOT / "data" / "processed" / "districts.geojson"
 
-EXPECTED_IDS = {"ciutat_vella", "eixample", "gracia", "sant_marti", "nou_barris"}
+EXPECTED_IDS = {
+    "ciutat_vella",
+    "eixample",
+    "sants_montjuic",
+    "les_corts",
+    "sarria_sant_gervasi",
+    "gracia",
+    "horta_guinardo",
+    "nou_barris",
+    "sant_andreu",
+    "sant_marti",
+}
 
 # Barcelona's own bounding box, used to sanity-check converted centroids/polygons.
 BCN_LON_RANGE = (2.05, 2.23)
@@ -29,8 +40,8 @@ def geojson():
     return json.loads(DISTRICTS_GEOJSON.read_text(encoding="utf-8"))
 
 
-def test_five_districts_with_expected_ids(profiles):
-    assert len(profiles) == 5
+def test_ten_districts_with_expected_ids(profiles):
+    assert len(profiles) == 10
     assert {p.id for p in profiles} == EXPECTED_IDS
 
 
@@ -94,7 +105,7 @@ def test_geojson_is_feature_collection_matching_json_ids(geojson, profiles):
 
 def test_geojson_file_under_size_budget():
     size = DISTRICTS_GEOJSON.stat().st_size
-    assert size < 400_000, f"districts.geojson is {size} bytes, over the 400KB budget"
+    assert size < 600_000, f"districts.geojson is {size} bytes, over the 600KB budget"
 
 
 def _point_in_ring(point: tuple[float, float], ring: list[list[float]]) -> bool:
@@ -155,3 +166,62 @@ def test_avg_rent_and_transit_score_are_real_data(profiles):
     for p in profiles:
         assert p.sources["avg_rent_monthly"] == Source.OPENDATA, p.id
         assert p.sources["transit_score"] == Source.DERIVED, p.id
+
+
+# --- New realism fields (10-district expansion) -------------------------------------------
+
+
+def test_area_km2_present_and_in_sane_range(profiles):
+    for p in profiles:
+        assert p.area_km2 is not None, p.id
+        assert 0.5 <= p.area_km2 <= 25.0, f"{p.id}: area_km2={p.area_km2}"
+        assert p.sources["area_km2"] == Source.DERIVED, p.id
+
+
+def test_total_area_close_to_barcelona_total(profiles):
+    # Barcelona's total municipal area is ~101 km^2.
+    total = sum(p.area_km2 for p in profiles)
+    assert 90.0 <= total <= 115.0, f"sum of district area_km2 = {total}"
+
+
+def test_tourist_flats_present_and_in_sane_range(profiles):
+    for p in profiles:
+        assert p.tourist_flats is not None, p.id
+        assert 0 <= p.tourist_flats <= 10_000, f"{p.id}: tourist_flats={p.tourist_flats}"
+        assert p.sources["tourist_flats"] == Source.OPENDATA, p.id
+
+
+def test_total_tourist_flats_close_to_city_aggregate(profiles):
+    # Commonly cited city-wide figure for licensed HUTs is ~10,000.
+    total = sum(p.tourist_flats for p in profiles)
+    assert 7_000 <= total <= 14_000, f"sum of district tourist_flats = {total}"
+
+
+def test_car_ownership_present_and_in_sane_range(profiles):
+    for p in profiles:
+        assert p.car_ownership is not None, p.id
+        assert 0.0 <= p.car_ownership <= 1.0, f"{p.id}: car_ownership={p.car_ownership}"
+        assert p.sources["car_ownership"] == Source.DERIVED, p.id
+
+
+def test_households_with_children_share_present_and_in_sane_range(profiles):
+    for p in profiles:
+        assert p.households_with_children_share is not None, p.id
+        assert 0.0 <= p.households_with_children_share <= 0.5, (
+            f"{p.id}: households_with_children_share={p.households_with_children_share}"
+        )
+        assert p.sources["households_with_children_share"] == Source.OPENDATA, p.id
+
+
+def test_commute_mode_share_present_sums_to_one_and_uses_valid_modes(profiles):
+    valid_modes = {"metro", "bus", "car", "bike", "walk"}
+    for p in profiles:
+        assert p.commute_mode_share is not None, p.id
+        assert set(p.commute_mode_share) <= valid_modes, (
+            f"{p.id}: unknown modes {set(p.commute_mode_share) - valid_modes}"
+        )
+        total = sum(p.commute_mode_share.values())
+        assert abs(total - 1.0) < 1e-3, f"{p.id}: commute_mode_share sums to {total}"
+        for mode, share in p.commute_mode_share.items():
+            assert 0.0 <= share <= 1.0, f"{p.id}.{mode}={share}"
+        assert p.sources["commute_mode_share"] == Source.DERIVED, p.id

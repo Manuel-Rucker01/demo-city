@@ -32,16 +32,22 @@ PROCESSED_DIR = ROOT / "data" / "processed"
 CKAN_BASE = "https://opendata-ajuntament.barcelona.cat/data/api/3/action"
 
 # --- Districts in scope for T1 (ids/names per task spec; Codi_Districte per Open Data BCN) --
+# All 10 official Barcelona districts (codes 1..10), same order as types.BCN_DISTRICTS.
 
 # codi: the numeric district code used in pad_mdbas*/renda-disponible*/cens-locals CSVs
 # ("Codi_Districte", plain int-as-string, e.g. "1", "10").
-# codi2: the same code zero-padded to 2 digits, used in the districtes geometry JSON
-# ("Codi_Districte", e.g. "01", "10").
+# codi2: the same code zero-padded to 2 digits, used in the districtes geometry JSON and a
+# few padro CSVs ("Codi_Districte", e.g. "01", "10").
 DISTRICTS = [
     {"id": "ciutat_vella", "name": "Ciutat Vella", "codi": "1", "codi2": "01"},
     {"id": "eixample", "name": "Eixample", "codi": "2", "codi2": "02"},
+    {"id": "sants_montjuic", "name": "Sants-Montjuïc", "codi": "3", "codi2": "03"},
+    {"id": "les_corts", "name": "Les Corts", "codi": "4", "codi2": "04"},
+    {"id": "sarria_sant_gervasi", "name": "Sarrià-Sant Gervasi", "codi": "5", "codi2": "05"},
     {"id": "gracia", "name": "Gràcia", "codi": "6", "codi2": "06"},
+    {"id": "horta_guinardo", "name": "Horta-Guinardó", "codi": "7", "codi2": "07"},
     {"id": "nou_barris", "name": "Nou Barris", "codi": "8", "codi2": "08"},
+    {"id": "sant_andreu", "name": "Sant Andreu", "codi": "9", "codi2": "09"},
     {"id": "sant_marti", "name": "Sant Martí", "codi": "10", "codi2": "10"},
 ]
 DISTRICT_BY_CODI = {d["codi"]: d for d in DISTRICTS}
@@ -145,6 +151,57 @@ DATASETS = {
         "raw_name": "barcelonaciutat_districtes.json",
         "notes": "District polygons, ETRS89 / UTM zone 31N (EPSG:25831) WKT, converted to WGS84 here.",
     },
+    "tourist_flats": {
+        "dataset_id": "habitatges-us-turistic",
+        "year": 2026,
+        "url": (
+            "https://opendata-ajuntament.barcelona.cat/data/dataset/c748799e-1079-44b1-9e60-"
+            "88d936a3fe70/resource/b32fa7f6-d464-403b-8a02-0292a64883bf/download"
+        ),
+        "raw_name": "hut_comunicacio_opendata.csv",
+        "notes": (
+            "One row per licensed tourist-use dwelling (HUT, 'habitatge d'us turistic') "
+            "currently registered with the Ajuntament (NUMERO_REGISTRE_GENERALITAT), with "
+            "district/barri and address; the live current-registry resource (not one of the "
+            "dataset's quarterly historical snapshots), CKAN metadata last modified 2026-05-21. "
+            "10,718 rows city-wide at fetch time, consistent with the ~10,000 licensed HUTs "
+            "commonly cited for Barcelona."
+        ),
+    },
+    "vehicles": {
+        "dataset_id": "rebuts-quota-padro-vehicle-bcn",
+        "year": 2026,
+        "url": (
+            "https://opendata-ajuntament.barcelona.cat/data/dataset/e21b436f-7f84-4f7b-a3de-"
+            "f7dc6b43264f/resource/cf7cf2bc-38e1-4c51-a4e9-6e581a597eda/download/"
+            "2026_rebuts_quota_padro_vehicles_bcn.csv"
+        ),
+        "raw_name": "2026_rebuts_quota_padro_vehicles_bcn.csv",
+        "notes": (
+            "Motor vehicle tax (IVTM) roll receipts by district, vehicle class and sub-class "
+            "(Total_Rebuts = number of taxed vehicles, i.e. registered to an owner address in "
+            "that district). Used here for the 'Turismes' (cars) class only, as the basis for "
+            "car_ownership. Small per-cell counts are suppressed as '..' in the source; treated "
+            "as the midpoint of the plausible [1,4] range like the padro suppression convention "
+            "used elsewhere in this script."
+        ),
+    },
+    "household_children": {
+        "dataset_id": "pad_dom_mdbas_tipus-domicili",
+        "year": 2025,
+        "url": (
+            "https://opendata-ajuntament.barcelona.cat/data/dataset/e4c7af22-fc3e-42a5-bc10-"
+            "e7dc7be92612/resource/1f3d6ec8-0d31-4b8e-bdec-a0557302c138/download"
+        ),
+        "raw_name": "pad_dom_mdbas_tipus-domicili_2025.csv",
+        "notes": (
+            "Households by household structure (TIPUS_DOMICILI, 12 categories per the padro "
+            "'pad-dimensions' code list) by census section, 1 Jan 2025 padro (same vintage as "
+            "the household_size dataset). Categories 9-12 are households with at least one "
+            "person under 18; households_with_children_share is (9+10+11+12) / (1..12) per "
+            "district."
+        ),
+    },
 }
 
 # Vacant / for-sale / for-rent ground-floor premises: excluded from the "shops" count.
@@ -218,6 +275,31 @@ PLAUSIBLE_DEFAULTS: dict[str, dict[str, float]] = {
         "vacancy_rate": 0.04,
         "unemployment_rate": 0.07,
         "jobs_per_resident": 0.75,  # 22@ tech/office district raises job count
+    },
+    "sants_montjuic": {
+        "vacancy_rate": 0.045,
+        "unemployment_rate": 0.08,  # working-class industrial legacy (docks, Zona Franca)
+        "jobs_per_resident": 0.65,  # Zona Franca industrial estate, port and Fira de Barcelona
+    },
+    "les_corts": {
+        "vacancy_rate": 0.03,
+        "unemployment_rate": 0.04,  # among the city's lowest, with Sarria-Sant Gervasi
+        "jobs_per_resident": 1.20,  # Diagonal-area offices, hospitals, Camp Nou, net job importer
+    },
+    "sarria_sant_gervasi": {
+        "vacancy_rate": 0.03,
+        "unemployment_rate": 0.04,  # the city's wealthiest district, lowest unemployment
+        "jobs_per_resident": 0.60,  # mostly upscale residential; some offices/private schools
+    },
+    "horta_guinardo": {
+        "vacancy_rate": 0.045,
+        "unemployment_rate": 0.08,  # middle/lower-middle income, above city average
+        "jobs_per_resident": 0.35,  # residential dormitory district (Vall d'Hebron hospital aside)
+    },
+    "sant_andreu": {
+        "vacancy_rate": 0.045,
+        "unemployment_rate": 0.08,  # historically industrial working-class district
+        "jobs_per_resident": 0.45,  # light-industrial legacy plus the emerging Sagrera hub
     },
 }
 
@@ -343,13 +425,17 @@ def process_shops(path: Path) -> dict[str, int]:
     return dict(counts)
 
 
-def process_household_size(path: Path) -> tuple[dict[str, float], dict[tuple[str, int], float]]:
-    """Returns (avg_household_size per district, households per (codi, section_num)).
+def process_household_size(
+    path: Path,
+) -> tuple[dict[str, float], dict[tuple[str, int], float], dict[str, float]]:
+    """Returns (avg_household_size per district, households per (codi, section_num),
+    total households per district).
 
     N_PERSONES_AGG is the household-size band (1..9, where 9 means "9 or more"); Valor is the
     number of households in that census section with that many registered residents. The
     household-count-by-section map is reused by process_income_household to household-weight
-    (rather than population-weight) the per-household income figure.
+    (rather than population-weight) the per-household income figure. The total-households map
+    is reused by process_car_ownership.
     """
     size_sum: dict[str, float] = defaultdict(float)
     hh_total: dict[str, float] = defaultdict(float)
@@ -368,7 +454,7 @@ def process_household_size(path: Path) -> tuple[dict[str, float], dict[tuple[str
             section_num = int(row["Seccio_Censal"]) - int(codi) * 1000
             hh_by_section[(codi, section_num)] += v
     avg_size = {d["id"]: round(size_sum[d["id"]] / hh_total[d["id"]], 3) for d in DISTRICTS}
-    return avg_size, dict(hh_by_section)
+    return avg_size, dict(hh_by_section), {d["id"]: hh_total[d["id"]] for d in DISTRICTS}
 
 
 def process_income_household(
@@ -421,6 +507,165 @@ def process_owner_share(path: Path) -> dict[str, float]:
                 + _parse_es_thousands(row["PropiPerHerenciaODonacio"])
             )
     return {d["id"]: round(owned[d["id"]] / total[d["id"]], 4) for d in DISTRICTS}
+
+
+def process_tourist_flats(path: Path) -> dict[str, int]:
+    """Count of currently-registered licensed tourist-use dwellings (HUT) per district: one row
+    per licence in the source (CODI_DISTRICTE, zero-padded)."""
+    counts: dict[str, int] = defaultdict(int)
+    with path.open(encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            codi2 = row["CODI_DISTRICTE"].strip()
+            did = DISTRICT_BY_CODI2.get(codi2)
+            if did is None:
+                continue
+            counts[did] += 1
+    return {d["id"]: counts[d["id"]] for d in DISTRICTS}
+
+
+def process_cars(path: Path) -> dict[str, float]:
+    """Number of cars ('Turismes') registered to an owner address per district, from the motor
+    vehicle tax (IVTM) roll. Codi_Districte is zero-padded here. Small suppressed cells ('..')
+    are treated as the midpoint (2.5) of the plausible [1,4] range, matching the suppression
+    convention used elsewhere in this script (e.g. process_population_age)."""
+    cars: dict[str, float] = defaultdict(float)
+    with path.open(encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            if row["Classe_Vehicle"] != "Turismes":
+                continue
+            codi2 = row["Codi_Districte"].strip().strip('"')
+            did = DISTRICT_BY_CODI2.get(codi2)
+            if did is None:
+                continue
+            raw = row["Total_Rebuts"].strip()
+            cars[did] += 2.5 if raw == ".." else float(raw)
+    return {d["id"]: cars[d["id"]] for d in DISTRICTS}
+
+
+# Catalonia-wide average number of cars per car-owning household is not published at BCN
+# district resolution; 1.2 is used here as a documented, disclosed approximation (roughly
+# consistent with INE/Idescat household-vehicle-ownership surveys, which put multi-car
+# ownership at a minority of car-owning households) to convert a registered-vehicle count into
+# a share of *households* with at least one car. See SOURCES.md.
+AVG_CARS_PER_CAR_OWNING_HOUSEHOLD = 1.2
+
+
+def process_car_ownership(
+    cars: dict[str, float], households: dict[str, float]
+) -> dict[str, float]:
+    """Derived share of households with at least one car: (cars / assumed cars-per-owning-
+    household) / households, capped at 0.98."""
+    return {
+        d["id"]: round(
+            min(0.98, (cars[d["id"]] / AVG_CARS_PER_CAR_OWNING_HOUSEHOLD) / households[d["id"]]),
+            4,
+        )
+        for d in DISTRICTS
+    }
+
+
+def process_children_share(path: Path) -> dict[str, float]:
+    """Share of households with at least one member under 18, from padro household-structure
+    categories 9-12 (see pad-dimensions TIPUS_DOMICILI code list) over all 12 categories,
+    per district."""
+    children_codes = {"9", "10", "11", "12"}
+    children: dict[str, float] = defaultdict(float)
+    total: dict[str, float] = defaultdict(float)
+    with path.open(encoding="utf-8-sig") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            codi = row["Codi_Districte"]
+            if codi not in DISTRICT_BY_CODI:
+                continue
+            did = DISTRICT_BY_CODI[codi]["id"]
+            v = float(row["Valor"])
+            total[did] += v
+            if row["TIPUS_DOMICILI"] in children_codes:
+                children[did] += v
+    return {d["id"]: round(children[d["id"]] / total[d["id"]], 4) for d in DISTRICTS}
+
+
+# --- Commute mode share: EMEF 2024 (ATM), Barcelona-specific report ------------------------
+# The Barcelona-specific EMEF 2024 report ("Informe especific Barcelona") gives a real,
+# city-wide, all-trip-purpose modal split in its section 3.1 as extractable text (see
+# SOURCES.md); a work-trip-only x district x mode cross-tab is not available (the report's
+# section 3.2 "Dades per districte" table is a chart image, not extractable text - only 3
+# bullet-point anchor figures for individual districts/modes are given as prose). No Open Data
+# BCN dataset publishes a district-level modal split either. So: the reproducible, documented
+# fallback described in the task brief is used - take the real citywide split and adjust each
+# district's public-transport and car shares with a damped elasticity to that district's own
+# transit_score and car_ownership (both already real/derived per-district data; see
+# _MODE_SHARE_ELASTICITY below for why the adjustment is damped rather than proportional),
+# holding the bike share at the city figure (no per-district cycling signal available), and
+# closing the gap with walk. This is Source.DERIVED, not real per-district survey data.
+#
+# City split (EMEF 2024, Informe especific Barcelona, section 3.1, all trip purposes):
+#   metro = Metro (13.3%) + Altres ferroviaris: FGC/Rodalies/Tram (4.0%) = 17.3%
+#   bus   = Autobus TMB (9.8%) + Altres autobus (0.4%) + Resta transport public (1.4%) = 11.6%
+#   car   = Cotxe (10.4%) + Moto i ciclomotor (5.4%) + Furgoneta/camio/resta (0.9%) = 16.7%
+#   bike  = Bicicleta (2.4%) + VMP/patinet (0.8%) = 3.2%
+#   walk  = Caminant = 51.3%
+# (sums to 100.1% in the source due to rounding; renormalized below.)
+_CITY_MODE_SHARE_RAW = {"metro": 17.3, "bus": 11.6, "car": 16.7, "bike": 3.2, "walk": 51.3}
+_CITY_MODE_SHARE_TOTAL = sum(_CITY_MODE_SHARE_RAW.values())
+CITY_MODE_SHARE = {k: v / _CITY_MODE_SHARE_TOTAL for k, v in _CITY_MODE_SHARE_RAW.items()}
+_CITY_PT_SHARE = CITY_MODE_SHARE["metro"] + CITY_MODE_SHARE["bus"]
+_METRO_FRACTION_OF_PT = CITY_MODE_SHARE["metro"] / _CITY_PT_SHARE  # split car/pt stays constant
+
+
+# Elasticity of each district's public-transport / car share to its transit_score /
+# car_ownership relative to the city mean: 1.0 would mean "shift proportionally to the ratio"
+# (tried first; for Eixample, whose transit_score is normalized to the city max 1.0, this
+# produced an implausibly large public-transport share crowding out nearly all walking, which
+# contradicts a real EMEF 2024 anchor figure for that district - see SOURCES.md). 0.5 is a
+# damped, documented compromise: still shifts each district's public-transport/car share in the
+# right direction and by a meaningful amount, without letting one outlier district's transit
+# density swing its whole modal split.
+_MODE_SHARE_ELASTICITY = 0.5
+
+
+def process_commute_mode_share(
+    transit_score: dict[str, float], car_ownership: dict[str, float]
+) -> dict[str, dict[str, float]]:
+    mean_transit = sum(transit_score.values()) / len(transit_score)
+    mean_car_own = sum(car_ownership.values()) / len(car_ownership)
+    city_car = CITY_MODE_SHARE["car"]
+    city_bike = CITY_MODE_SHARE["bike"]
+
+    out: dict[str, dict[str, float]] = {}
+    for d in DISTRICTS:
+        did = d["id"]
+        transit_ratio = transit_score[did] / mean_transit if mean_transit else 1.0
+        pt_mult = 1.0 + _MODE_SHARE_ELASTICITY * (transit_ratio - 1.0)
+        pt_d = _CITY_PT_SHARE * min(1.8, max(0.4, pt_mult))
+        pt_d = min(0.55, max(0.05, pt_d))
+
+        car_ratio = car_ownership[did] / mean_car_own if mean_car_own else 1.0
+        car_mult = 1.0 + _MODE_SHARE_ELASTICITY * (car_ratio - 1.0)
+        car_d = city_car * min(1.8, max(0.4, car_mult))
+        car_d = min(0.40, max(0.05, car_d))
+
+        bike_d = city_bike
+        walk_d = max(0.05, 1.0 - pt_d - car_d - bike_d)
+
+        total = pt_d + car_d + bike_d + walk_d
+        pt_d, car_d, bike_d, walk_d = (x / total for x in (pt_d, car_d, bike_d, walk_d))
+        metro_d = pt_d * _METRO_FRACTION_OF_PT
+        bus_d = pt_d * (1 - _METRO_FRACTION_OF_PT)
+
+        shares = {
+            "metro": round(metro_d, 4),
+            "bus": round(bus_d, 4),
+            "car": round(car_d, 4),
+            "bike": round(bike_d, 4),
+            "walk": round(walk_d, 4),
+        }
+        drift = round(1.0 - sum(shares.values()), 4)
+        shares["walk"] = round(shares["walk"] + drift, 4)
+        out[did] = shares
+    return out
 
 
 # Transit-equipment categories counted towards transit_score, and their weight: heavy/regional
@@ -716,11 +961,20 @@ def process_geometry(path: Path) -> dict[str, dict[str, Any]]:
     for d in DISTRICTS:
         row = by_codi2[d["codi2"]]
         rings_utm = parse_wkt_polygon_rings(row["geometria_etrs89"])
-        # exterior ring = largest by point count (our 5 target districts are simple POLYGONs)
-        exterior_utm = max(rings_utm, key=len)
+        # Two of the 10 districts (Sants-Montjuic, Sarria-Sant Gervasi) are true MULTIPOLYGONs
+        # in this dataset (a small detached piece - port breakwater / Vallvidrera-Tibidabo -
+        # alongside the main body); the exterior ring for the rendered polygon/centroid must be
+        # the largest-by-AREA ring, not the largest-by-point-count one (point count is a poor
+        # proxy: a small detached piece can be digitized with more vertices than the main body,
+        # which silently picked the wrong, tiny ring here before this was checked against all
+        # 10 districts). area_km2 sums ALL rings, so the detached piece's area is still counted
+        # even though only the principal ring is drawn in districts.geojson (keeps the file a
+        # simple Polygon per district, and matches official district-area figures closely -
+        # e.g. Sarria-Sant Gervasi 17.83 + 2.08 = 19.91 km^2 vs. the ~19.9 km^2 published figure).
+        exterior_utm = max(rings_utm, key=polygon_area)
         centroid_utm = polygon_centroid(exterior_utm)
         centroid_lonlat = utm_to_wgs84(*centroid_utm)
-        area_km2 = polygon_area(exterior_utm) / 1e6
+        area_km2 = sum(polygon_area(r) for r in rings_utm) / 1e6
 
         exterior_wgs84 = [utm_to_wgs84(x, y) for x, y in exterior_utm]
         # simplify: ~0.00005 deg ~= 5.5m at this latitude, then round to 5 decimals (~1.1m)
@@ -753,6 +1007,11 @@ def build_profiles(
     income_household: dict[str, float],
     owner_share: dict[str, float],
     transit_score: dict[str, float],
+    area_km2: dict[str, float],
+    tourist_flats: dict[str, int],
+    car_ownership: dict[str, float],
+    commute_mode_share: dict[str, dict[str, float]],
+    households_with_children_share: dict[str, float],
 ) -> list[dict[str, Any]]:
     profiles = []
     for d in DISTRICTS:
@@ -771,6 +1030,11 @@ def build_profiles(
             "income_per_household_annual": "opendata",
             "owner_share": "opendata",
             "avg_household_size": "opendata",
+            "area_km2": "derived",
+            "tourist_flats": "opendata",
+            "car_ownership": "derived",
+            "commute_mode_share": "derived",
+            "households_with_children_share": "opendata",
         }
         refs = {
             "population": f"{DATASETS['population_age']['dataset_id']} ({DATASETS['population_age']['year']})",
@@ -830,6 +1094,38 @@ def build_profiles(
                 f"({DATASETS['household_size']['year']}), mean of N_PERSONES_AGG (household-size "
                 "band, capped at 9=9+) weighted by household counts, by census section"
             ),
+            "area_km2": (
+                f"derived: shoelace-formula area of the district polygon in its source UTM "
+                f"projection (from {DATASETS['geometry']['dataset_id']} "
+                f"{DATASETS['geometry']['year']}), same computation used for transit_score"
+            ),
+            "tourist_flats": (
+                f"{DATASETS['tourist_flats']['dataset_id']} ({DATASETS['tourist_flats']['year']}), "
+                "count of licensed tourist-use dwellings (HUT) currently registered, by district"
+            ),
+            "car_ownership": (
+                f"derived from {DATASETS['vehicles']['dataset_id']} "
+                f"({DATASETS['vehicles']['year']}), 'Turismes' (cars) registered to an owner "
+                "address in the district, divided by an assumed "
+                f"{AVG_CARS_PER_CAR_OWNING_HOUSEHOLD} cars per car-owning household (documented, "
+                f"undisclosed-at-district-resolution assumption - see SOURCES.md) and by total "
+                f"households ({DATASETS['household_size']['dataset_id']} "
+                f"{DATASETS['household_size']['year']}); capped at 0.98"
+            ),
+            "commute_mode_share": (
+                "derived: city-wide all-trip-purpose modal split from EMEF 2024 (ATM, Informe "
+                "especific Barcelona, section 3.1) adjusted per district with a damped "
+                "elasticity (0.5) to that district's own transit_score (public-transport share) "
+                "and car_ownership (car share), bike share held at the city figure, walk as "
+                "residual - no district x mode x purpose table was machine-extractable; known "
+                "to still understate Eixample's real active-mode share - see SOURCES.md"
+            ),
+            "households_with_children_share": (
+                f"{DATASETS['household_children']['dataset_id']} "
+                f"({DATASETS['household_children']['year']}), share of households (TIPUS_DOMICILI "
+                "categories 9-12, i.e. containing at least one person under 18) over all "
+                "household-structure categories, by census section, summed to district"
+            ),
         }
         profiles.append(
             {
@@ -850,6 +1146,11 @@ def build_profiles(
                 "income_per_household_annual": income_household[did],
                 "owner_share": owner_share[did],
                 "avg_household_size": household_size[did],
+                "area_km2": round(area_km2[did], 4),
+                "tourist_flats": tourist_flats[did],
+                "car_ownership": car_ownership[did],
+                "commute_mode_share": commute_mode_share[did],
+                "households_with_children_share": households_with_children_share[did],
             }
         )
     return profiles
@@ -870,7 +1171,11 @@ def write_geojson(geo: dict[str, dict[str, Any]], dest: Path) -> None:
     dest.write_text(json.dumps(fc, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
 
 
-def write_sources_md(dest: Path, rent_year: int, rent_prev_year: int) -> None:
+def write_sources_md(
+    dest: Path,
+    rent_year: int,
+    rent_prev_year: int,
+) -> None:
     lines = [
         "# Data sources — data/processed/districts.json / districts.geojson",
         "",
@@ -884,13 +1189,18 @@ def write_sources_md(dest: Path, rent_year: int, rent_prev_year: int) -> None:
         f"| shops | opendata | `{DATASETS['shops']['dataset_id']}` | {DATASETS['shops']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['shops']['dataset_id']} | Ground-floor premises census; rows tagged as vacant/for-sale/for-rent premises ({', '.join(sorted(VACANT_SHOP_SECTORS))}) are excluded. |",
         f"| centroid, district polygons (districts.geojson) | opendata | `{DATASETS['geometry']['dataset_id']}` | {DATASETS['geometry']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['geometry']['dataset_id']} | District boundaries, published as WKT in ETRS89 / UTM zone 31N (EPSG:25831); converted to WGS84 in this script via an inverse transverse Mercator implementation (Snyder 1987 series), then Douglas-Peucker simplified (epsilon 0.00005 deg) and rounded to 5 decimals. Centroid is the polygon's area-weighted centroid (shoelace formula) in UTM, then converted. Area (km^2, used by transit_score) is the same ring's shoelace area in UTM. |",
         f"| avg_rent_monthly | opendata | `{DATASETS['rent']['dataset_id']}` | {rent_year} | {DATASETS['rent']['url']} | Mitjana anual del lloguer mitja contractual (EUR/month) per district, published by the Secretaria de l'Habitatge i Renovacio Urbana (Generalitat de Catalunya), based on INCASO rental-deposit records (near-census of new contracts). Not an Open Data BCN dataset - found via the Ajuntament's own Barcelona Dades portal (`portaldades.ajuntament.barcelona.cat`), which links to this Generalitat workbook rather than hosting district-level rent figures itself. {rent_prev_year} is also kept for comparison (rents fell slightly city-wide between {rent_prev_year} and {rent_year}). Parsed with a small stdlib `zipfile`/`xml` reader (no openpyxl). |",
-        "| vacancy_rate | plausible | — | — | — | No district-level rental-market vacancy dataset found (checked `package_search` for \"habitatges buits\", \"viviendas vacias\", \"habitatge buit\", \"habitatges desocupats\" on 2026-09-24). INE Census 2021 publishes a *stock* \"viviendas vacias\" figure, a different concept from rental-market vacancy, and it was not found broken out by Barcelona district either. Hand-set, centred around city-wide rental vacancy norms (~3-6%). |",
-        "| unemployment_rate | plausible | — | — | — | No *machine-readable, district-level* registered-unemployment series was found: the Ajuntament publishes district unemployment only as PDF bulletins (e.g. `barcelonactiva.cat` monthly \"Evolucio de l'atur registrat\", city-wide only) or through a JS-rendered dashboard (`portaldades.ajuntament.barcelona.cat/estadistiques/noypwz2129` \"Taxa d'atur registral\", no exposed API found), and the BCNROC Anuari Estadistic PDF that likely has the table could not be fetched (rate-limited by the host's WAF on 2026-09-24). District *headcounts* for April 2022 are reported by local press (totbarcelona.cat, citing the Ajuntament's Departament d'Estudis/Observatori Municipal de Dades) but combining a 2022 headcount with 2025 population would mix vintages, so they were not used numerically. Hand-set instead, recalibrated to the city-wide rate the Ajuntament reported for 2025 (5.6% of pop. 16-64 in March 2025, per the Departament d'Estudis bulletin; 7.67% \"taxa d'atur\", May 2025, per beteve.cat - the two use different denominators/methodologies and are both cited so the discrepancy is visible), keeping the well-documented relative ranking (Ciutat Vella/Nou Barris highest, Eixample/Gracia lowest, consistent with the 2022 headcount ordering and the 2017 Enquesta Sociodemografica). |",
-        "| jobs_per_resident | plausible | — | — | — | No job-location-count dataset found (checked `package_search` for \"llocs de treball\", \"afiliacions\", \"cotitzacio\", \"centres de treball\", \"empreses\" on 2026-09-24; the closest matches, `rebuts-quota-padro-iae` and `cens-locals-planta-baixa-act-economica`, count tax quotas / ground-floor premises, not jobs). Hand-set from each district's known economic role (Eixample/Ciutat Vella = commercial/office cores and net job importers; Gràcia/Nou Barris = mostly residential). |",
-        f"| transit_score | derived | `{DATASETS['transports']['dataset_id']}` | {DATASETS['transports']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['transports']['dataset_id']} | Weighted count of transit-equipment points (metro/urban-FGC, regional FGC, RENFE/Rodalies, airport train = weight 1.0; tram = weight 0.5; funicular/cable-car/maritime-station excluded) per km^2 of district area, normalized so the densest of the 5 districts scores 1.0. The dataset records access points/entrances rather than unique stations, so this is a transit-infrastructure density, not a station headcount. |",
+        "| vacancy_rate | plausible | — | — | — | No district-level rental-market vacancy dataset found (checked `package_search` for \"habitatges buits\", \"viviendas vacias\", \"habitatge buit\", \"habitatges desocupats\" on 2026-09-24). INE Census 2021 publishes a *stock* \"viviendas vacias\" figure, a different concept from rental-market vacancy, and it was not found broken out by Barcelona district either. Hand-set for all 10 districts, centred around city-wide rental vacancy norms (~3-6%). |",
+        "| unemployment_rate | plausible | — | — | — | No *machine-readable, district-level* registered-unemployment series was found: the Ajuntament publishes district unemployment only as PDF bulletins (e.g. `barcelonactiva.cat` monthly \"Evolucio de l'atur registrat\", city-wide only) or through a JS-rendered dashboard (`portaldades.ajuntament.barcelona.cat/estadistiques/noypwz2129` \"Taxa d'atur registral\", no exposed API found), and the BCNROC Anuari Estadistic PDF that likely has the table could not be fetched (rate-limited by the host's WAF on 2026-09-24). District *headcounts* for April 2022 are reported by local press (totbarcelona.cat, citing the Ajuntament's Departament d'Estudis/Observatori Municipal de Dades) but combining a 2022 headcount with 2025 population would mix vintages, so they were not used numerically. Hand-set instead, recalibrated to the city-wide rate the Ajuntament reported for 2025 (5.6% of pop. 16-64 in March 2025, per the Departament d'Estudis bulletin; 7.67% \"taxa d'atur\", May 2025, per beteve.cat - the two use different denominators/methodologies and are both cited so the discrepancy is visible), keeping the well-documented relative ranking for all 10 districts (Nou Barris/Ciutat Vella highest; Sarria-Sant Gervasi/Les Corts lowest, consistent with the 2022 headcount ordering, the 2017 Enquesta Sociodemografica and the Ajuntament's own district unemployment-map rankings). |",
+        "| jobs_per_resident | plausible | — | — | — | No job-location-count dataset found (checked `package_search` for \"llocs de treball\", \"afiliacions\", \"cotitzacio\", \"centres de treball\", \"empreses\" on 2026-09-24; the closest matches, `rebuts-quota-padro-iae` and `cens-locals-planta-baixa-act-economica`, count tax quotas / ground-floor premises, not jobs). Hand-set for all 10 districts from each district's known economic role (Eixample/Les Corts/Ciutat Vella = commercial/office cores and net job importers; Sants-Montjuic = Zona Franca industrial estate + Fira de Barcelona; Sarria-Sant Gervasi/Gracia/Horta-Guinardo = mostly residential, net job exporters; Nou Barris/Sant Andreu = residential/light-industrial, few local jobs; Sant Marti = 22@ tech/office district). |",
+        f"| transit_score | derived | `{DATASETS['transports']['dataset_id']}` | {DATASETS['transports']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['transports']['dataset_id']} | Weighted count of transit-equipment points (metro/urban-FGC, regional FGC, RENFE/Rodalies, airport train = weight 1.0; tram = weight 0.5; funicular/cable-car/maritime-station excluded) per km^2 of district area, normalized so the densest of the 10 districts scores 1.0. The dataset records access points/entrances rather than unique stations, so this is a transit-infrastructure density, not a station headcount. |",
         f"| income_per_household_annual | opendata | `{DATASETS['income_household']['dataset_id']}` | {DATASETS['income_household']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['income_household']['dataset_id']} | Average **gross** taxable income per household (not disposable income - compare with `income_per_capita_annual`, which is disposable), INE/Idescat Atles de distribucio de renda, by census section, household-weighted up to district (weights from `{DATASETS['household_size']['dataset_id']}` {DATASETS['household_size']['year']}). |",
         f"| owner_share | opendata | `{DATASETS['tenure_2011']['dataset_id']}` | {DATASETS['tenure_2011']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['tenure_2011']['dataset_id']} | Share of main dwellings owned (outright, mortgaged, or by inheritance/donation), Cens de Poblacio i Habitatges 2011, barri rows summed to district. This is the most recent *district-resolution* tenure table found: the 2021 census results were not found published at Barcelona-district resolution (INE/Idescat publish tenure regime at province/municipality level, and the Open Data BCN catalogue's only tenure-regime dataset is this 2011 one), and the 2017 Enquesta Sociodemografica de Barcelona reports only a city-wide figure (57.6% owner-occupied) plus a qualitative district ranking, not per-district percentages. The 2011 district figures are consistent with that later city-wide number (city-wide weighted average from this table: ~61.9%). |",
         f"| avg_household_size | opendata | `{DATASETS['household_size']['dataset_id']}` | {DATASETS['household_size']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['household_size']['dataset_id']} | Mean household size (persons per household), padro households by number of registered residents (N_PERSONES_AGG, capped at 9=9+), weighted by household count, by census section. |",
+        f"| area_km2 | derived | `{DATASETS['geometry']['dataset_id']}` | {DATASETS['geometry']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['geometry']['dataset_id']} | Shoelace-formula area of each district polygon's exterior ring, computed in the source ETRS89/UTM31N projection (near-equal-area at this scale) — the same area figure `transit_score` divides by. |",
+        f"| tourist_flats | opendata | `{DATASETS['tourist_flats']['dataset_id']}` | {DATASETS['tourist_flats']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['tourist_flats']['dataset_id']} | Count of licensed tourist-use dwellings (HUT) currently registered with the Ajuntament, one row per licence, grouped by district (CODI_DISTRICTE). This is the dataset's live current-registry resource (`hut_comunicacio_opendata.csv`), not one of its quarterly historical snapshots; CKAN `metadata_modified` 2026-05-21. City-wide total at fetch time: 10,718, consistent with the commonly cited ~10,000 licensed HUTs in Barcelona (sanity-checked against that figure). |",
+        f"| car_ownership | derived | `{DATASETS['vehicles']['dataset_id']}` | {DATASETS['vehicles']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['vehicles']['dataset_id']} | Share of households with at least one car. Numerator: 'Turismes' (cars) rows from the motor vehicle tax (IVTM) roll, summed by district (Total_Rebuts = number of taxed vehicles registered to an owner address there); small suppressed cells ('..') treated as the midpoint of [1,4]. Divided by an assumed {AVG_CARS_PER_CAR_OWNING_HOUSEHOLD} cars per car-owning household — **not** itself sourced at district resolution; a documented approximation, roughly consistent with INE/Idescat findings that most car-owning households own exactly one car — and by total households (`{DATASETS['household_size']['dataset_id']}` {DATASETS['household_size']['year']}); capped at 0.98. City-wide result ≈53% of households, inside the commonly cited 45-55% range used as a sanity check. Considered an alternative source, `est_vehicles_index_motor` (motorization index per census section), but it is too heavily suppressed at district 1/4/5/6 to aggregate reliably. |",
+        "| commute_mode_share | derived | EMEF 2024 (ATM) | 2024 | https://www.institutmetropoli.cat/wp-content/uploads/2025/11/EMEF-2024_Informe-Barcelona_ATM.pdf | Not an Open Data BCN dataset (no district x mode x trip-purpose table was found there or from AMB's own open data catalogue). The Barcelona-specific EMEF 2024 'Informe especific Barcelona' report gives a real, city-wide, **all-trip-purpose** modal split as extractable text (section 3.1: walk 51.3%, bike+VMP 3.2%, metro+other-rail 17.3%, bus 11.6%, car+moto+van 16.7% — not work-trips only, since a work-trip-only breakdown wasn't published at this resolution). Its section 3.2 'Dades per districte' table is a chart image (not machine-extractable), so no real per-district split exists here; 5 prose anchor figures are quoted for context (Ciutat Vella 61.0% and Eixample 59.5% active-mode i.e. walk+bike share; Nou Barris 35.1% and Sant Andreu 31.7% public-transport share; Sarria-Sant Gervasi 25.7% private-vehicle share). The per-district value here is DERIVED: each district's public-transport share is the city figure multiplied by `1 + 0.5*(transit_score_d/mean(transit_score) - 1)` (car share the same formula with car_ownership), clipped to [0.4x, 1.8x] then to [0.05, 0.55]/[0.05, 0.40] of the total; bike share is held at the city figure (no per-district cycling signal available); walk absorbs the remainder; metro/bus keep the city-wide metro:bus ratio within the public-transport share; all 5 shares then renormalized to sum to 1.0. **Checked against the anchors**: Sarria-Sant Gervasi's derived car share (~0.24) and Nou Barris/Sant Andreu's derived public-transport shares track their real anchors reasonably; Ciutat Vella's derived active share is close to its 61% anchor; but Eixample's derived active share (walk+bike) comes out well below its real 59.5% anchor, because Eixample's transit_score is normalized to the city maximum (1.0, vs. a ~0.37 mean), which this simple rule reads as 'residents use public transport instead of walking' when in reality dense, mixed-use Eixample has both very high transit provision *and* very high walkability. This is a disclosed limitation of using transit-infrastructure density as a behavioural proxy, not a data error; a first attempt at this rule used a proportional (not damped) elasticity and produced an even larger gap (~36pp vs. the ~22pp gap here), which is why the elasticity was damped to 0.5 - see `_MODE_SHARE_ELASTICITY` in `scripts/fetch_opendata.py`. |",
+        f"| households_with_children_share | opendata | `{DATASETS['household_children']['dataset_id']}` | {DATASETS['household_children']['year']} | https://opendata-ajuntament.barcelona.cat/data/dataset/{DATASETS['household_children']['dataset_id']} | Share of households containing at least one person under 18, from padro household-structure categories 9-12 (of 12; see the `pad-dimensions` TIPUS_DOMICILI code list) over all categories, by census section, summed to district. City-wide result ≈21.4% of ≈684,000 households, consistent with the ~680k households cited as a sanity check. |",
         "",
         "## Reproducing",
         "",
@@ -924,7 +1234,7 @@ def main() -> None:
     print("[process] rent (Generalitat workbook)")
     rent, rent_year, rent_prev, rent_prev_year = process_rent(paths["rent"])
     print("[process] household size + household counts by section")
-    household_size, hh_by_section = process_household_size(paths["household_size"])
+    household_size, hh_by_section, hh_total = process_household_size(paths["household_size"])
     print("[process] income per household (household-weighted)")
     income_household = process_income_household(paths["income_household"], hh_by_section)
     print("[process] owner share (2011 census tenure)")
@@ -932,6 +1242,15 @@ def main() -> None:
     print("[process] transit score (station density)")
     area_km2 = {d["id"]: geo[d["id"]]["area_km2"] for d in DISTRICTS}
     transit_score = process_transit_score(paths["transports"], area_km2)
+    print("[process] tourist flats (licensed HUT registry)")
+    tourist_flats = process_tourist_flats(paths["tourist_flats"])
+    print("[process] car ownership (IVTM vehicle tax roll)")
+    cars = process_cars(paths["vehicles"])
+    car_ownership = process_car_ownership(cars, hh_total)
+    print("[process] commute mode share (derived from transit_score/car_ownership)")
+    commute_mode_share = process_commute_mode_share(transit_score, car_ownership)
+    print("[process] households with children (padro household structure)")
+    households_with_children_share = process_children_share(paths["household_children"])
 
     for d in DISTRICTS:
         did = d["id"]
@@ -952,6 +1271,11 @@ def main() -> None:
         income_household,
         owner_share,
         transit_score,
+        area_km2,
+        tourist_flats,
+        car_ownership,
+        commute_mode_share,
+        households_with_children_share,
     )
 
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
@@ -978,6 +1302,10 @@ def main() -> None:
             f"hh_size={p['avg_household_size']:.2f} "
             f"transit={p['transit_score']:.2f} "
             f"shops={p['shops']:>5,} "
+            f"area={p['area_km2']:.2f} "
+            f"hut={p['tourist_flats']:>5,} "
+            f"car_own={p['car_ownership']:.2f} "
+            f"kids={p['households_with_children_share']:.2f} "
             f"centroid={p['centroid']}"
         )
 

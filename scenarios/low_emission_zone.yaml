@@ -1,0 +1,11 @@
+extends: base.yaml
+name: low_emission_zone
+description: >-
+  Low-emission zone covering Ciutat Vella and Eixample from tick 30: car commuters living
+  or working there pay an extra 60 EUR/month, echoing Barcelona's real Rondes-bounded LEZ
+  (this scenario narrows it to the two central districts for a clearer effect).
+policies:
+  - type: low_emission_zone
+    districts: [ciutat_vella, eixample]
+    start_tick: 30
+    car_cost_monthly: 60.0
