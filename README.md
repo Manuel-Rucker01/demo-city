@@ -78,24 +78,37 @@ JEV_PROVIDER=openrouter uv run jevcity run --scenario scenarios/base.yaml --yes
 uv run jevcity run --scenario scenarios/base.yaml --replay-from runs/<id>/jev_calls.ndjson.gz
 ```
 
-### Cost and speed (estimates)
+### Cost and speed (measured)
 
-Measured on mock runs (1,000 agents): ~37 requests/tick, ~750 input tokens/request
-(~290 state + ~460 questions). At $0.042 per million input tokens (output is free):
+Real runs through Vercel AI Gateway (2026-09-24, 250 agents × 120 days, two scenarios, 2,229
+calls, 0 failed): ~1,300 input tokens per call (state + 4 questions), ~200–300 ms at the
+provider, ~20 calls/min effective on a free-credit key (Vercel advertises
+`x-ratelimit-limit-requests: 30`; 429s say the upstream provider is under high demand).
 
-| Setup | Requests/tick | Cost/tick | Cost per 365-day run | Time/tick (lower bound) |
+At $0.042 per million input tokens (output is free), from a calibrated 1,000-agent year:
+
+| Setup | Calls per scenario | Cost per scenario | Time at ~20 calls/min | Time at 1,080 calls/min* |
 |---|---|---|---|---|
-| 1,000 agents, `quality` (K=1) | ~37 | ~$0.0012 | **~$0.43** | ~2.1 s (req/min binds) |
-| 1,000 agents, `throughput` (K auto: 64 TypeSafe, 39 OpenRouter) | ~1 | ~$0.0009 | ~$0.34 | ~0.1 s |
-| 10,000 agents, `quality` | ~370 | ~$0.012 | ~$4.3 | ~21 s |
+| 500 agents × 365 days | ~6,500 | ~$0.35 | ~5.5 h | ~6 min |
+| 1,000 agents × 365 days | ~12,900 | ~$0.71 | ~11 h | ~12 min |
+| 10,000 agents × 365 days | ~129,000 | ~$7 | days | ~2 h |
 
-Time bounds use TypeSafe's published limits (1,200 req/min, 250k tokens/s) at 90 %; OpenRouter
-and Vercel publish no Jev-specific limits. Real latency observed once via Vercel: ~190 ms at the
-provider, ~1 s round trip.
+\* TypeSafe's published limit (1,200/min) at 90 %. OpenRouter and Vercel publish no Jev limits.
 
-`throughput` mode packs several agents into one state. Jev's own docs warn that longer states and
-indirection reduce accuracy, so `quality` is the default until an A/B comparison on the real
-model shows the answers hold up.
+### Batching several agents per call (not recommended yet)
+
+`batching: throughput` packs K agents into one state. Measured through Vercel on 2026-09-24:
+
+- **More than 32 questions in one call returns HTTP 503** (undocumented; 32 works, 33 fails
+  regardless of state size). With 4 questions per agent, K ≤ 8; the adapter enforces this via
+  `max_questions_per_request` in `config/providers.yaml`.
+- **Even within the limit, large calls are unreliable:** sequential probes returned 503 for
+  3/8 calls at K=4, 4/8 at K=5 and 4/8 at K=8, versus 0/5 at K=1. Retries eventually succeed but
+  each attempt counts against the rate limit, so the real speed-up is about 2×, not K×.
+- **Answer fidelity at K>1 is unmeasured** (the A/B script `scripts/ab_batching.py` could not
+  complete because of the 503s). Jev's docs warn that long states reduce accuracy.
+
+So the default stays `quality` (K=1).
 
 ### How answers become actions
 
