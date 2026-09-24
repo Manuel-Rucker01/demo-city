@@ -11,9 +11,9 @@ housing units and jobs in `DistrictState` are in *agent units* (1 unit = 1 agent
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Literal, Protocol
+from typing import Annotated, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -28,6 +28,13 @@ TICKS_PER_MONTH = 30
 SIM_START_DATE = "2026-01-01"
 
 DistrictId = str  # slug, e.g. "gracia", "eixample", "sant_marti", "nou_barris", "ciutat_vella"
+
+# All 10 Barcelona districts (official codes 1..10), in code order.
+BCN_DISTRICTS: tuple[DistrictId, ...] = (
+    "ciutat_vella", "eixample", "sants_montjuic", "les_corts", "sarria_sant_gervasi",
+    "gracia", "horta_guinardo", "nou_barris", "sant_andreu", "sant_marti",
+)
+LEAVE_CITY = "leave_city"  # extra `destination` option: the household leaves Barcelona
 
 
 # --- World ---------------------------------------------------------------------------------
@@ -64,6 +71,11 @@ class DistrictProfile(BaseModel):
     income_per_household_annual: float | None = None  # EUR, gross or disposable (see refs)
     owner_share: float | None = None  # share of households owning their home, 0..1
     avg_household_size: float | None = None  # persons per household
+    area_km2: float | None = None
+    tourist_flats: int | None = None  # licensed tourist-use dwellings (HUT), real count
+    car_ownership: float | None = None  # share of households with at least one car
+    commute_mode_share: dict[str, float] | None = None  # CommuteMode value -> share, sums to 1
+    households_with_children_share: float | None = None  # share of households with minors
 
 
 class DistrictState(BaseModel):
@@ -80,6 +92,16 @@ class DistrictState(BaseModel):
     shop_revenue_daily: float = 0.0  # EUR spent by agents in this district today
     rent_cap: float | None = None  # active cap on new-lease market rent, EUR/month
     max_increase_pct: float | None = None  # active cap on renewal increase, e.g. 0.0 = freeze
+    # Tourism: dwellings (agent units) used as tourist flats; not available to residents.
+    tourist_units: int = 0
+    # Local commerce (real-count scale, not agent units): open shops and last month's revenue.
+    shops_open: int = 0
+    shop_revenue_monthly: float = 0.0
+    shop_revenue_baseline: float = 0.0  # first full month, for open/close dynamics
+    # Transport policies in effect.
+    transit_boost: float = 0.0  # added to profile.transit_score (clipped to 1)
+    low_emission_zone: bool = False
+    car_cost_extra_monthly: float = 0.0  # extra monthly cost for car commuters (LEZ charge)
 
     @property
     def vacant_units(self) -> int:
@@ -108,6 +130,21 @@ class World:
 class Tenure(StrEnum):
     RENTER = "renter"
     OWNER = "owner"
+
+
+class CommuteMode(StrEnum):
+    METRO = "metro"  # metro, tram, FGC, Rodalies
+    BUS = "bus"
+    CAR = "car"  # car or motorbike
+    BIKE = "bike"
+    WALK = "walk"
+
+
+class ShoppingPlace(StrEnum):
+    LOCAL = "local"  # shops in their own district
+    WORK_DISTRICT = "work_district"  # near their job
+    CENTRE = "centre"  # Ciutat Vella / Eixample shopping streets
+    ONLINE = "online"
 
 
 class Occupation(StrEnum):
@@ -139,6 +176,12 @@ class Agent:
     last_move_tick: int | None = None
     tenure: Tenure = Tenure.RENTER  # owners: rent_monthly holds their housing cost
     #                                 (mortgage/fees), fixed; no lease renewals
+    children: int = 0  # minors in the household
+    has_car: bool = False
+    commute_mode: CommuteMode | None = None  # None if not commuting (unemployed, retired)
+    shopping_place: ShoppingPlace = ShoppingPlace.LOCAL
+    active: bool = True  # False once the household has left Barcelona
+    arrived_tick: int | None = None  # set for households that moved into the city mid-run
 
     @property
     def income_monthly(self) -> float:
@@ -162,6 +205,11 @@ class EventKind(StrEnum):
     PAYDAY = "payday"  # monthly, staggered by agent id
     RENT_BURDEN = "rent_burden"  # burden crossed scenario threshold; payload: burden
     LIFE_EVENT = "life_event"  # payload: kind in {"new_child","partner","health","inheritance"}
+    SCHOOL_YEAR = "school_year"  # September, households with children
+    TRANSIT_CHANGE = "transit_change"  # new line / LEZ affecting home or job district; payload: kind
+    SHOP_CLOSED = "shop_closed"  # local shops closing in home district; payload: closed_pct
+    TOURISM_PRESSURE = "tourism_pressure"  # tourist flats rising nearby; payload: tourist_share
+    ARRIVED = "arrived"  # new household settled in the city this tick
 
 
 class Event(BaseModel):
@@ -181,7 +229,16 @@ class Action(StrEnum):
     SAVE = "save"
 
 
-QUESTION_NAMES = ("action", "destination", "spending", "satisfaction")
+QUESTION_NAMES = (
+    "action", "destination", "spending", "satisfaction", "commute_mode", "shopping_place",
+)
+# action/destination/spending/satisfaction are always asked; commute_mode and shopping_place
+# are CONDITIONAL (only when an event makes them relevant) to save tokens -- parse tolerates
+# their absence. Up to 6 questions per agent -> K <= 5 under the 32-question provider limit.
+# Token budget (enforced by tests in prompts): average <= 1,400 real tokens per K=1 request,
+# max <= 1,900 (real tokens ~= len(canonical json) / 2.3).
+TOKEN_BUDGET_AVG = 1400
+TOKEN_BUDGET_MAX = 1900
 
 
 def question_key(agent_id: int, name: str) -> str:
@@ -228,12 +285,14 @@ class AgentDecision(BaseModel):
     agent_id: int
     tick: int
     action: Action
-    destination: DistrictId | None  # only set when action == MOVE
+    destination: DistrictId | None  # only set when action == MOVE; may be LEAVE_CITY
     spending: float  # 0..1
     satisfaction: float  # 0..1
     confidence: float  # confidence of the action answer
     gated: bool = False  # True if low confidence forced action to STAY
     action_probs: dict[str, float] = Field(default_factory=dict)
+    commute_mode: CommuteMode | None = None  # None = not asked / keep current
+    shopping_place: ShoppingPlace | None = None
 
 
 @dataclass
@@ -244,6 +303,8 @@ class TickDelta:
     changes: list[AgentChange]
     failed_moves: int = 0  # MOVE decisions that found no vacancy / could not afford
     job_matches: int = 0
+    arrivals: list[Agent] = field(default_factory=list)  # households that moved into BCN
+    departures: list[int] = field(default_factory=list)  # agent ids that left BCN
 
 
 # --- Jev adapter ---------------------------------------------------------------------------
@@ -373,7 +434,41 @@ class RentCapPolicy(BaseModel):
     max_increase_pct: float | None = None  # cap on renewal increases, e.g. 0.0 = freeze
 
 
-Policy = RentCapPolicy  # becomes a discriminated union as policies are added
+class TouristFlatPolicy(BaseModel):
+    """Phase out tourist flats (e.g. Barcelona's plan to revoke ~10,000 HUT licences by 2028):
+    between start_tick and end_tick tourist_units shrink linearly to (1 - reduction) of their
+    initial level; `return_to_rental_share` of the removed units join the residential stock."""
+
+    type: Literal["tourist_flat_ban"] = "tourist_flat_ban"
+    districts: list[DistrictId] | Literal["all"] = "all"
+    start_tick: int = 0
+    end_tick: int = 365
+    reduction: float = 1.0
+    return_to_rental_share: float = 1.0
+
+
+class TransitLinePolicy(BaseModel):
+    """New metro/tram line: raises transit in the listed districts from start_tick."""
+
+    type: Literal["new_transit_line"] = "new_transit_line"
+    districts: list[DistrictId]
+    start_tick: int = 0
+    transit_boost: float = 0.2
+
+
+class LowEmissionZonePolicy(BaseModel):
+    """Low-emission zone: car commuters living or working in the listed districts pay extra."""
+
+    type: Literal["low_emission_zone"] = "low_emission_zone"
+    districts: list[DistrictId]
+    start_tick: int = 0
+    car_cost_monthly: float = 60.0
+
+
+Policy = Annotated[
+    RentCapPolicy | TouristFlatPolicy | TransitLinePolicy | LowEmissionZonePolicy,
+    Field(discriminator="type"),
+]
 
 
 class MarketParams(BaseModel):
@@ -385,6 +480,13 @@ class MarketParams(BaseModel):
     job_match_daily_prob: float = 0.3  # per job_search decision, scaled by vacancies
     spend_to_jobs: float = 0.00002  # new job slots per EUR of monthly shop revenue surplus
     moving_cost: float = 1500.0
+    tourism_rent_pressure: float = 0.5  # extra excess-demand per unit of tourist share of stock
+    shop_close_threshold: float = 0.85  # monthly revenue / baseline below this -> shops close
+    shop_open_threshold: float = 1.10  # above this -> shops open
+    shop_monthly_change_max: float = 0.02  # max share of shops opening/closing per month
+    jobs_per_shop: float = 2.5  # real jobs per shop (converted to agent units)
+    car_cost_monthly: float = 250.0  # baseline running cost of a commuting car
+    public_transport_monthly: float = 40.0  # T-usual-like monthly pass
 
 
 class EventParams(BaseModel):
@@ -393,6 +495,19 @@ class EventParams(BaseModel):
     life_event_daily_prob: float = 0.0008
     rent_burden_threshold: float = 0.40
     lease_length_ticks: int = 360
+    tourism_pressure_daily_prob: float = 0.002  # scaled by district tourist share
+    school_year_tick: int = 244  # ~1 September
+
+
+class MigrationParams(BaseModel):
+    """Households arriving in / leaving Barcelona. Arrivals are new agents (new ids)."""
+
+    arrivals_per_month_per_1000: float = 1.5  # new households per 1,000 agents per month
+    leave_city_moving_cost: float = 3000.0
+
+
+class PromptParams(BaseModel):
+    max_districts_in_state: int = 5  # home + job + most relevant affordable alternatives
 
 
 class Scenario(BaseModel):
@@ -402,10 +517,13 @@ class Scenario(BaseModel):
     ticks: int = 365
     n_agents: int = 1000
     data_path: str = "data/processed/districts.json"
+    districts: list[DistrictId] | None = None  # None = every district in the data file
     jev: JevConfig = Field(default_factory=JevConfig)
     market: MarketParams = Field(default_factory=MarketParams)
     events: EventParams = Field(default_factory=EventParams)
     policies: list[Policy] = Field(default_factory=list)
+    migration: MigrationParams = Field(default_factory=MigrationParams)
+    prompt: PromptParams = Field(default_factory=PromptParams)
 
 
 # --- Run log -------------------------------------------------------------------------------
@@ -424,6 +542,13 @@ class DistrictSnapshot(BaseModel):
     avg_satisfaction: float
     avg_rent_burden: float  # MEDIAN rent/income among renters (name kept for compatibility)
     rent_cap_active: bool
+    tourist_units: int = 0
+    shops_open: int = 0
+    shop_revenue_monthly: float = 0.0
+    mode_share: dict[str, float] = Field(default_factory=dict)  # among commuting residents
+    online_share: float = 0.0  # residents whose main shopping is online
+    arrivals: int = 0  # today
+    departures: int = 0  # today
 
 
 class MoveRecord(BaseModel):
@@ -451,6 +576,8 @@ class TickRecord(BaseModel):
     changes: list[AgentChange]
     usage_tick: Usage  # usage_tick.models_seen = exact model versions that answered this tick
     usage_total: Usage
+    arrivals: list[AgentSnapshot] = Field(default_factory=list)  # new households (new dots)
+    departures: list[int] = Field(default_factory=list)  # agent ids that left the city
 
 
 class RunMeta(BaseModel):
@@ -477,6 +604,9 @@ class AgentSnapshot(BaseModel):
     rent_monthly: float
     satisfaction: float
     tenure: Tenure = Tenure.RENTER
+    children: int = 0
+    has_car: bool = False
+    commute_mode: CommuteMode | None = None
 
 
 class RunSummary(BaseModel):
