@@ -38,7 +38,16 @@ export class Playback {
 
   private emit(): void {
     const state: PlaybackState = { tickIndex: this.tickIndex, playing: this.playing, speed: this.speed };
-    for (const l of this.listeners) l(state);
+    // A listener exception must never propagate out of here: `loop()` calls emit() before
+    // scheduling its next requestAnimationFrame, so an uncaught throw from one listener (e.g. a
+    // chart choking on unusual data) would otherwise silently freeze all future playback.
+    for (const l of this.listeners) {
+      try {
+        l(state);
+      } catch (err) {
+        console.error("Playback: listener threw, continuing playback", err);
+      }
+    }
   }
 
   play(): void {

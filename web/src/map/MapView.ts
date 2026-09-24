@@ -16,6 +16,42 @@ export type FillMetric = "avg_rent" | "unemployment_rate" | "avg_satisfaction";
 const BARCELONA_CENTER: [number, number] = [2.17, 41.4];
 const DARK_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
+/** [minLon, minLat, maxLon, maxLat] over every coordinate in every district polygon, so the
+ * camera can be fit to the real district bounds (e.g. Nou Barris in the north) instead of a
+ * hand-picked center/zoom that might crop a district off-screen. */
+export function districtsBounds(geo: DistrictsGeo): [[number, number], [number, number]] {
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+  const visit = (coords: unknown): void => {
+    const arr = coords as unknown[];
+    if (typeof arr[0] === "number") {
+      const [lon, lat] = coords as [number, number];
+      if (lon < minLon) minLon = lon;
+      if (lat < minLat) minLat = lat;
+      if (lon > maxLon) maxLon = lon;
+      if (lat > maxLat) maxLat = lat;
+    } else {
+      for (const c of coords as unknown[]) visit(c);
+    }
+  };
+  for (const f of geo.featureCollection.features) {
+    const geom = f.geometry as { coordinates?: unknown } | null;
+    if (geom?.coordinates) visit(geom.coordinates);
+  }
+  if (!Number.isFinite(minLon)) {
+    return [
+      [BARCELONA_CENTER[0] - 0.02, BARCELONA_CENTER[1] - 0.02],
+      [BARCELONA_CENTER[0] + 0.02, BARCELONA_CENTER[1] + 0.02],
+    ];
+  }
+  return [
+    [minLon, minLat],
+    [maxLon, maxLat],
+  ];
+}
+
 interface MoveAnim {
   agentId: number;
   srcIdx: number;
@@ -90,7 +126,15 @@ export class MapView {
     this.overlay = new MapboxOverlay({ interleaved: false, layers: [] });
     this.map.addControl(this.overlay as unknown as maplibregl.IControl);
 
-    this.map.on("load", () => this.render());
+    // Fit the camera to the real bounds of all district polygons (padded) instead of a
+    // hand-picked center/zoom, so the northern district (Nou Barris) isn't cropped off-screen —
+    // both split maps use the same geo, so they end up framed identically ("synced").
+    const bounds = districtsBounds(opts.geo);
+    this.map.fitBounds(bounds, { padding: 48, duration: 0 });
+    this.map.on("load", () => {
+      this.map.fitBounds(bounds, { padding: 48, duration: 0 });
+      this.render();
+    });
     this.startAnimationLoop();
   }
 
@@ -229,14 +273,22 @@ export class MapView {
         this.colors[index * 3]!,
         this.colors[index * 3 + 1]!,
         this.colors[index * 3 + 2]!,
-        220,
+        235,
       ],
+      // Larger, brighter dots so they read clearly over the (now much subtler) choropleth fill.
       getRadius: 12,
       radiusUnits: "meters",
-      radiusMinPixels: 1.4,
-      radiusMaxPixels: 6,
+      radiusMinPixels: 2.5,
+      radiusMaxPixels: 8,
       stroked: false,
       pickable: false,
+      // Additive glow: SRC_ALPHA/ONE blending makes overlapping dots bloom brighter instead of
+      // muddying into a flat disc, which keeps dense districts legible against the dark basemap.
+      parameters: {
+        blend: true,
+        blendFunc: [0x0302 /* SRC_ALPHA */, 1 /* ONE */],
+        depthTest: false,
+      },
       updateTriggers: {
         getPosition: this.frameCounter,
         getFillColor: this.frameCounter,
@@ -252,13 +304,17 @@ export class MapView {
       data: moves,
       getSourcePosition: (d: MoveAnim) => d.srcPos,
       getTargetPosition: (d: MoveAnim) => d.dstPos,
-      getSourceColor: [255, 255, 255, 40],
+      // Bright white-hot origin fading into the destination district's color — a clearly visible
+      // "trail" for ~1.5s (see animateMove's durationMs) rather than a faint hairline.
+      getSourceColor: [255, 255, 255, 160],
       getTargetColor: (d: MoveAnim) => {
         const idx = this.agentIdToIndex.get(d.agentId)!;
-        return [this.colors[idx * 3]!, this.colors[idx * 3 + 1]!, this.colors[idx * 3 + 2]!, 180];
+        return [this.colors[idx * 3]!, this.colors[idx * 3 + 1]!, this.colors[idx * 3 + 2]!, 255];
       },
-      getWidth: 1.5,
+      getWidth: 2.5,
+      getHeight: 0.6,
       greatCircle: false,
+      parameters: { depthTest: false },
       updateTriggers: { getSourcePosition: this.frameCounter, getTargetPosition: this.frameCounter },
     });
   }
@@ -269,19 +325,32 @@ export class MapView {
       data: this.geo.featureCollection,
       filled: true,
       stroked: true,
+      // Subtle fill (~10-15% alpha) + a thin tinted outline, so the choropleth reads as
+      // ambient color rather than competing with the agent dots for attention.
       getFillColor: (f: GeoJSON.Feature) => {
         const id = (f.properties as Record<string, unknown>)?.id as DistrictId;
         const snap = this.districtSnapshots.get(id);
-        if (!snap) return [255, 255, 255, 10];
+        if (!snap) return [255, 255, 255, 8];
         const [lo, hi] = this.fillDomain;
         const v = hi > lo ? (this.metricValue(snap) - lo) / (hi - lo) : 0.5;
         const [r, g, b] = viridis(v);
-        return [r, g, b, 60];
+        return [r, g, b, 34];
       },
-      getLineColor: [255, 255, 255, 90],
-      lineWidthMinPixels: 1.5,
+      getLineColor: (f: GeoJSON.Feature) => {
+        const id = (f.properties as Record<string, unknown>)?.id as DistrictId;
+        const snap = this.districtSnapshots.get(id);
+        if (!snap) return [255, 255, 255, 70];
+        const [lo, hi] = this.fillDomain;
+        const v = hi > lo ? (this.metricValue(snap) - lo) / (hi - lo) : 0.5;
+        const [r, g, b] = viridis(v);
+        return [r, g, b, 190];
+      },
+      lineWidthMinPixels: 1.25,
       pickable: false,
-      updateTriggers: { getFillColor: [this.fillMetric, this.districtSnapshots.size, this.frameCounter] },
+      updateTriggers: {
+        getFillColor: [this.fillMetric, this.districtSnapshots.size, this.frameCounter],
+        getLineColor: [this.fillMetric, this.districtSnapshots.size, this.frameCounter],
+      },
     });
   }
 

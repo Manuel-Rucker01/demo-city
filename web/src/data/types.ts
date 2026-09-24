@@ -45,6 +45,10 @@ export interface Usage {
   retries: number;
   errors: number;
   cache_hits: number;
+  /** Newer fields — optional so older exported runs without them still typecheck. */
+  cost_source?: string;
+  rate_limited?: number;
+  models_seen?: Record<string, number>;
 }
 
 export interface DistrictSnapshot {
@@ -145,6 +149,8 @@ export interface RunIndexEntry {
   description: string;
   ticks: number;
   n_agents: number;
+  /** e.g. "mock" | "anthropic" | ... — which Jev provider produced this run's decisions. */
+  provider?: string;
 }
 
 export type RunIndex = RunIndexEntry[];

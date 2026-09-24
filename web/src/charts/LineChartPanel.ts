@@ -1,11 +1,12 @@
 /** A dark-themed ECharts line panel (avg rent, unemployment, etc.) with a synced time cursor.
  * In compare mode, the base run draws solid lines and the scenario run draws dashed lines,
- * with the capped district (if any) rendered thicker so the policy effect reads at a glance. */
+ * with the capped district (if any) rendered thicker so the policy effect reads at a glance;
+ * other districts are dimmed so the highlighted story stands out. */
 
 import * as echarts from "echarts";
 import { CHART_THEME_NAME } from "./theme";
 import { DISTRICT_IDS, type DistrictId, type TickRecord } from "../data/types";
-import { DISTRICT_COLORS, FG_DIM } from "../style/theme";
+import { DISTRICT_COLORS, FG_DIM, ACCENT } from "../style/theme";
 import { districtDisplayName } from "../data/format";
 
 export interface LineSeriesSpec {
@@ -13,16 +14,23 @@ export interface LineSeriesSpec {
   ticks: TickRecord[];
   metric: (d: TickRecord["districts"][number]) => number;
   highlightDistrict?: DistrictId | null;
+  /** Tick index (1-based) a policy affecting `highlightDistrict` starts — draws a "cap starts" annotation. */
+  policyStartTick?: number | null;
 }
 
 export class LineChartPanel {
   private chart: echarts.ECharts;
   private title: string;
   private valueFormatter: (v: number) => string;
+  /** Record mode: tooltips are fully disabled (no hover, no programmatic showTip) — this panel
+   * is view-only on a recording, so a lingering tooltip box would just be visual clutter/bug. */
+  private tooltipsEnabled: boolean;
+  private annotationTick: number | null = null;
 
-  constructor(container: HTMLElement, title: string, valueFormatter: (v: number) => string) {
+  constructor(container: HTMLElement, title: string, valueFormatter: (v: number) => string, opts: { tooltipsEnabled?: boolean } = {}) {
     this.title = title;
     this.valueFormatter = valueFormatter;
+    this.tooltipsEnabled = opts.tooltipsEnabled ?? true;
     this.chart = echarts.init(container, CHART_THEME_NAME, { renderer: "canvas" });
     this.chart.setOption(this.baseOption());
   }
@@ -30,10 +38,29 @@ export class LineChartPanel {
   private baseOption(): echarts.EChartsOption {
     return {
       title: { text: this.title, left: 8, top: 4, textStyle: { fontSize: 13, fontWeight: 600 } },
-      grid: { left: 48, right: 16, top: 40, bottom: 24 },
+      grid: { left: 52, right: 16, top: 40, bottom: 40 },
       xAxis: { type: "category", data: [] },
-      yAxis: { type: "value", axisLabel: { formatter: (v: number) => this.valueFormatter(v) } },
-      tooltip: { trigger: "axis", valueFormatter: (v) => this.valueFormatter(v as number) },
+      yAxis: {
+        type: "value",
+        splitNumber: 4,
+        axisLabel: { formatter: (v: number) => this.valueFormatter(v) },
+      },
+      legend: {
+        bottom: 0,
+        left: 8,
+        right: 8,
+        itemWidth: 12,
+        itemHeight: 8,
+        textStyle: { fontSize: 10.5 },
+        type: "scroll",
+      },
+      // Tooltip only ever appears on real mouse hover ("axis" trigger, default triggerOn); it is
+      // never opened programmatically — the playback time cursor below is a plain markLine, not
+      // a tooltip. Fully off in record mode.
+      tooltip: this.tooltipsEnabled
+        ? { trigger: "axis", valueFormatter: (v) => this.valueFormatter(v as number) }
+        : { show: false },
+      axisPointer: this.tooltipsEnabled ? undefined : { show: false },
       animation: false,
       series: [],
     };
@@ -43,6 +70,9 @@ export class LineChartPanel {
   setData(specs: LineSeriesSpec[]): void {
     const dates = specs[0]?.ticks.map((t) => t.date) ?? [];
     const series: echarts.SeriesOption[] = [];
+    const hasHighlight = specs.some((s) => s.highlightDistrict);
+    this.annotationTick = specs.find((s) => s.highlightDistrict && s.policyStartTick != null)?.policyStartTick ?? null;
+
     for (const spec of specs) {
       for (const did of DISTRICT_IDS) {
         const data = spec.ticks.map((t) => {
@@ -50,6 +80,7 @@ export class LineChartPanel {
           return d ? spec.metric(d) : null;
         });
         const isHighlighted = spec.highlightDistrict === did;
+        const dimmed = hasHighlight && !isHighlighted;
         series.push({
           id: `${spec.runLabel}-${did}`,
           name: `${districtDisplayName(did)}${specs.length > 1 ? ` (${spec.runLabel})` : ""}`,
@@ -59,8 +90,8 @@ export class LineChartPanel {
           lineStyle: {
             color: DISTRICT_COLORS[did],
             type: spec.runLabel === "scenario" ? "dashed" : "solid",
-            width: isHighlighted ? 3.5 : 1.75,
-            opacity: isHighlighted || specs.length === 1 ? 1 : 0.85,
+            width: isHighlighted ? 3.5 : dimmed ? 1.25 : 1.75,
+            opacity: isHighlighted ? 1 : dimmed ? 0.3 : specs.length === 1 ? 1 : 0.85,
           },
           itemStyle: { color: DISTRICT_COLORS[did] },
           emphasis: { focus: "series" },
@@ -69,11 +100,38 @@ export class LineChartPanel {
       }
     }
     this.chart.setOption({ xAxis: { data: dates }, series }, { replaceMerge: ["series"] });
+    this.renderAnnotation();
   }
 
-  /** Move the vertical time cursor to tick index `i` (synced to playback). */
+  /** Draws a static "cap starts" vertical marker at the policy start tick, if any (independent
+   * of playback position — this doesn't move as the time cursor scrubs). */
+  private renderAnnotation(): void {
+    if (this.annotationTick == null) {
+      this.chart.setOption({ series: [{ id: "policy-annotation", type: "line", data: [], markLine: { data: [] } }] });
+      return;
+    }
+    this.chart.setOption({
+      series: [
+        {
+          id: "policy-annotation",
+          type: "line",
+          data: [],
+          markLine: {
+            symbol: "none",
+            silent: true,
+            animation: false,
+            lineStyle: { color: ACCENT, width: 1.5, type: "dashed" },
+            label: { show: true, formatter: "cap starts", color: ACCENT, fontSize: 10, position: "insideEndTop" },
+            data: [{ xAxis: Math.max(0, this.annotationTick - 1) }],
+          },
+        },
+      ],
+    });
+  }
+
+  /** Move the vertical time cursor to tick index `i` (synced to playback). Never opens a
+   * tooltip — only a silent markLine, so it can't get "stuck" over the panel during playback. */
   setCursor(i: number): void {
-    this.chart.dispatchAction({ type: "showTip", seriesIndex: 0, dataIndex: i });
     this.chart.setOption({
       series: [
         {

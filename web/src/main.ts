@@ -12,7 +12,7 @@ import { Playback, type SpeedMultiplier } from "./playback/Playback";
 import { parseRecordParams, mountRecordOverlay } from "./record/RecordMode";
 import { DISTRICT_COLORS } from "./style/theme";
 import { DISTRICT_IDS, type RunIndex } from "./data/types";
-import { districtDisplayName } from "./data/format";
+import { districtDisplayName, formatCurrencyCompact } from "./data/format";
 
 registerChartTheme();
 
@@ -81,11 +81,18 @@ legendRow.innerHTML = DISTRICT_IDS.map(
 ).join("");
 
 const kpiTiles = new KpiTiles(document.getElementById("kpi-tiles") as HTMLDivElement);
-const rentChart = new LineChartPanel(document.getElementById("rent-chart") as HTMLDivElement, "Avg market rent / district", (v) => `€${Math.round(v)}`);
+const tooltipsEnabled = !record.enabled;
+const rentChart = new LineChartPanel(
+  document.getElementById("rent-chart") as HTMLDivElement,
+  "Avg market rent / district",
+  formatCurrencyCompact,
+  { tooltipsEnabled },
+);
 const unemploymentChart = new LineChartPanel(
   document.getElementById("unemployment-chart") as HTMLDivElement,
   "Unemployment rate / district",
   (v) => `${(v * 100).toFixed(0)}%`,
+  { tooltipsEnabled },
 );
 const sankeyChart = new SankeyPanel(document.getElementById("sankey-chart") as HTMLDivElement);
 
@@ -152,7 +159,8 @@ async function setup(baseRunId: string, compareRunId: string | null): Promise<vo
   loadingEl.style.display = "none";
 
   if (record.enabled) {
-    const overlay = mountRecordOverlay(document.body, {});
+    const provider = runIndex.find((r) => r.run_id === baseRunId)?.provider ?? null;
+    const overlay = mountRecordOverlay(document.body, { title: record.title ?? undefined, provider });
     window.setTimeout(() => {
       playback?.setSpeed(Math.max(1, Math.min(10, record.speed)) as SpeedMultiplier);
       playback?.play();
@@ -171,6 +179,7 @@ function renderCharts(): void {
     ticks: s.loaded.ticks,
     metric: (d: { avg_rent: number }) => d.avg_rent,
     highlightDistrict: s.loaded.meta.scenario.policies[0]?.district ?? null,
+    policyStartTick: s.loaded.meta.scenario.policies[0]?.start_tick ?? null,
   }));
   rentChart.setData(rentSpecs);
   const unemploymentSpecs = slots.map((s) => ({
@@ -178,6 +187,7 @@ function renderCharts(): void {
     ticks: s.loaded.ticks,
     metric: (d: { unemployment_rate: number }) => d.unemployment_rate,
     highlightDistrict: s.loaded.meta.scenario.policies[0]?.district ?? null,
+    policyStartTick: s.loaded.meta.scenario.policies[0]?.start_tick ?? null,
   }));
   unemploymentChart.setData(unemploymentSpecs);
 }
@@ -293,16 +303,23 @@ async function boot(): Promise<void> {
     }
   });
 
-  if (record.enabled) {
-    compareMode = !!record.compare;
-    if (compareMode) {
-      compareToggle.classList.add("active");
-      compareSelect.style.display = "inline-block";
-    }
-    await setup(record.run ?? base?.run_id ?? "", record.compare ?? null);
-  } else {
-    await setup(base?.run_id ?? "", null);
+  // `?run=A&compare=B` opens compare mode directly on load, in both record mode and the normal
+  // interactive app — not only when `record=1` is also set.
+  const urlParams = new URLSearchParams(window.location.search);
+  const urlRun = urlParams.get("run") ?? record.run;
+  const urlCompare = urlParams.get("compare") ?? record.compare;
+  const initialRunId = (urlRun && runIndex.some((r) => r.run_id === urlRun)) ? urlRun : base?.run_id ?? "";
+  const initialCompareId = (urlCompare && runIndex.some((r) => r.run_id === urlCompare)) ? urlCompare : null;
+
+  if (initialRunId) runSelect.value = initialRunId;
+  if (initialCompareId) compareSelect.value = initialCompareId;
+
+  compareMode = !!initialCompareId;
+  if (compareMode) {
+    compareToggle.classList.add("active");
+    compareSelect.style.display = "inline-block";
   }
+  await setup(initialRunId, initialCompareId);
 }
 
 void boot();

@@ -42,6 +42,15 @@ export function formatDateHuman(isoDate: string): string {
   return d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 
+/** "jev-1.13.0+mock" (x13464) style models_seen map -> short "jev-1.13.0+mock" label(s), e.g.
+ * for a small footer/KPI readout. Picks the most-used model(s); joins ties with " + ". */
+export function formatModelsSeen(modelsSeen: Record<string, number> | undefined): string {
+  if (!modelsSeen) return "";
+  const entries = Object.entries(modelsSeen).sort((a, b) => b[1] - a[1]);
+  if (entries.length === 0) return "";
+  return entries.map(([name]) => name).join(" + ");
+}
+
 export function districtDisplayName(id: string): string {
   const names: Record<string, string> = {
     ciutat_vella: "Ciutat Vella",

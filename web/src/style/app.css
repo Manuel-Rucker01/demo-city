@@ -98,7 +98,7 @@ button.active {
 .app-main {
   flex: 1 1 auto;
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: 1fr 540px;
   gap: 1px;
   background: var(--border);
   min-height: 0;
@@ -163,7 +163,7 @@ button.active {
 
 .kpi-row {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 1px;
   background: var(--border);
   border-bottom: 1px solid var(--border);
@@ -173,6 +173,7 @@ button.active {
 .kpi-tile {
   background: var(--bg-panel);
   padding: 10px 14px;
+  min-width: 0;
 }
 
 .kpi-label {
@@ -181,12 +182,28 @@ button.active {
   letter-spacing: 0.06em;
   color: var(--fg-dim);
   margin-bottom: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .kpi-value {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 700;
   font-family: "Inter Tight", "Inter", sans-serif;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.kpi-models-row {
+  padding: 4px 14px 10px;
+  font-size: 10.5px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .legend-row {
@@ -214,12 +231,12 @@ button.active {
 
 .chart-slot {
   flex: 0 0 auto;
-  height: 190px;
+  height: 240px;
   border-bottom: 1px solid var(--border);
 }
 
 .chart-slot.sankey {
-  height: 230px;
+  height: 260px;
 }
 
 /* ---- playback bar ---- */

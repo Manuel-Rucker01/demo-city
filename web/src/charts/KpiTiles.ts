@@ -1,7 +1,7 @@
 /** KPI tile row: day/date, population per district, moves today, Jev calls, tokens, cost, satisfaction. */
 
 import type { TickRecord, RunMeta } from "../data/types";
-import { formatDateHuman, formatInt, formatPercent, formatTokensCompact, formatUsdCost } from "../data/format";
+import { formatDateHuman, formatInt, formatModelsSeen, formatPercent, formatTokensCompact, formatUsdCost } from "../data/format";
 
 export interface KpiInputs {
   meta: RunMeta;
@@ -22,6 +22,7 @@ const TILE_DEFS: { key: string; label: string }[] = [
 
 export class KpiTiles {
   private els = new Map<string, HTMLElement>();
+  private modelsRow: HTMLElement;
 
   constructor(container: HTMLElement) {
     container.classList.add("kpi-row");
@@ -32,6 +33,9 @@ export class KpiTiles {
       container.appendChild(tile);
       this.els.set(def.key, tile.querySelector(".kpi-value") as HTMLElement);
     }
+    this.modelsRow = document.createElement("div");
+    this.modelsRow.className = "kpi-models-row";
+    container.parentElement?.insertBefore(this.modelsRow, container.nextSibling);
   }
 
   update(inputs: KpiInputs): void {
@@ -50,6 +54,7 @@ export class KpiTiles {
       set("tokens", "—");
       set("cost", "—");
       set("satisfaction", "—");
+      this.modelsRow.textContent = "";
       return;
     }
 
@@ -61,5 +66,8 @@ export class KpiTiles {
     set("cost", formatUsdCost(tick.usage_total.cost_usd, tick.usage_total.estimated));
     const avgSat = tick.districts.reduce((s, d) => s + d.avg_satisfaction, 0) / (tick.districts.length || 1);
     set("satisfaction", formatPercent(avgSat));
+
+    const models = formatModelsSeen(tick.usage_total.models_seen);
+    this.modelsRow.textContent = models ? `Model: ${models}` : "";
   }
 }

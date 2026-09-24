@@ -20,18 +20,32 @@ export function parseRecordParams(search: string = window.location.search): Reco
 }
 
 const DEFAULT_TITLE = "What happens if Gràcia caps rents?";
-const DEFAULT_SUBTITLE = "1,000 AI citizens · decisions by Jev";
+
+/** Builds the footer/subtitle line honestly: when the run's decisions came from the mock
+ * provider (no real LLM calls), it must say "simulated by a mock", not "decisions by Jev" —
+ * staying accurate matters more than the punchier phrasing. */
+export function footerText(provider: string | null | undefined): string {
+  if (provider && provider !== "mock") {
+    return `Simulation — not a forecast · decisions by Jev (${provider})`;
+  }
+  return "Simulation — not a forecast · decisions simulated by a mock (not Jev)";
+}
+
+function subtitleText(provider: string | null | undefined): string {
+  if (provider && provider !== "mock") return `1,000 AI citizens · decisions by Jev (${provider})`;
+  return "1,000 AI citizens · decisions simulated by a mock, not Jev";
+}
 
 /** Builds the title-card overlay (fades after ~4s) and footer/date-ticker DOM, appended to `root`. */
 export function mountRecordOverlay(
   root: HTMLElement,
-  opts: { title?: string; subtitle?: string },
+  opts: { title?: string; subtitle?: string; provider?: string | null },
 ): { setDate: (isoDate: string) => void } {
   const titleCard = document.createElement("div");
   titleCard.className = "record-title-card";
   titleCard.innerHTML = `
     <div class="record-title">${opts.title ?? DEFAULT_TITLE}</div>
-    <div class="record-subtitle">${opts.subtitle ?? DEFAULT_SUBTITLE}</div>
+    <div class="record-subtitle">${opts.subtitle ?? subtitleText(opts.provider)}</div>
   `;
   root.appendChild(titleCard);
   // Fade out after a beat, then remove from flow entirely.
@@ -44,7 +58,7 @@ export function mountRecordOverlay(
 
   const footer = document.createElement("div");
   footer.className = "record-footer";
-  footer.textContent = "Simulation — not a forecast";
+  footer.textContent = footerText(opts.provider);
   root.appendChild(footer);
 
   return {
