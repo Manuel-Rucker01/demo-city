@@ -1,0 +1,9 @@
+{
+  "name": "jevcity-recorder",
+  "private": true,
+  "type": "module",
+  "description": "Records the web replay to MP4 (Playwright + ffmpeg). Dev tool, not part of the app.",
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

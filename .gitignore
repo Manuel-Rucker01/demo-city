@@ -12,3 +12,6 @@ web/dist/
 web/public/runs/
 .env
 .DS_Store
+tools/recorder/node_modules/
+media/*.webm
+media/frames/

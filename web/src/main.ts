@@ -175,12 +175,26 @@ let lastTickIndex = 0;
 let compareMode = false;
 let runIndex: RunIndex = [];
 
+const SCENARIO_LABELS: Record<string, string> = {
+  base: "Base",
+  new_metro_line: "New metro line",
+  rent_cap_gracia: "Rent cap · Gràcia",
+  rent_cap_sant_andreu: "Rent cap · Sant Andreu",
+  hut_ban_2028: "Tourist-flat ban",
+  low_emission_zone: "Low-emission zone",
+  combo_policies: "Rent cap + tourist-flat ban",
+};
+
+function scenarioLabel(name: string): string {
+  return SCENARIO_LABELS[name] ?? name.replace(/_/g, " ");
+}
+
 async function buildMapSlot(runId: string, label: "base" | "scenario"): Promise<RunSlot> {
   const slotEl = document.createElement("div");
   slotEl.className = "map-slot";
   const labelEl = document.createElement("div");
   labelEl.className = "map-slot-label";
-  labelEl.textContent = label === "base" ? "Base" : "Rent cap · Gràcia";
+  labelEl.textContent = label === "base" ? "Base" : "Scenario";
   slotEl.appendChild(labelEl);
   mapPane.appendChild(slotEl);
 
@@ -188,6 +202,7 @@ async function buildMapSlot(runId: string, label: "base" | "scenario"): Promise<
   const loaded = await loadRun(runId, (loadedTicks, total) => {
     loadingEl.textContent = `Loading ${label} run… ${loadedTicks}/${total} ticks`;
   });
+  labelEl.textContent = scenarioLabel(loaded.meta.scenario.name);
   // MapView is built with the FULL agent roster (initial population + every arrival across the
   // run, in the same dense column order reconstructRun uses) since the whole run is already
   // loaded by this point — arrivals aren't a "future unknown", just initially-inactive columns.

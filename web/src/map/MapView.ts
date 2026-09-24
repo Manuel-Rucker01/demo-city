@@ -17,6 +17,16 @@ import {
   viridis,
 } from "../style/theme";
 
+// maplibre-gl derives its worker's URL from `import.meta.url` of whatever bundle references it,
+// which only happens to work in `npm run dev` (Vite serves node_modules/ verbatim) and breaks in
+// `npm run build` (no matching path in dist/). vite.config.ts copies the worker script *and* the
+// maplibre-gl-shared.mjs chunk it internally imports (unhashed, side by side, exactly as they
+// ship in node_modules/maplibre-gl/dist/) into public/vendor/maplibre-gl/ on every dev-server
+// start and build, so this fixed path is valid in dev, build, and preview alike. Must run before
+// any `new maplibregl.Map(...)` — module load order guarantees that here, since this file is
+// always imported before a MapView is constructed.
+maplibregl.setWorkerUrl("/vendor/maplibre-gl/maplibre-gl-worker.mjs");
+
 export type ColorMode = "district" | "employed" | "satisfaction" | "commute";
 export type FillMetric = "avg_rent" | "unemployment_rate" | "avg_satisfaction" | "tourist_units" | "shops_open";
 
@@ -298,6 +308,18 @@ export class MapView {
     const tick = () => {
       this.updateRenderPositions();
       this.render();
+      // Keep maplibre's own repaint loop alive alongside deck.gl's. maplibre only schedules a
+      // repaint (via triggerRepaint -> browser.frame) while something is "dirty"; once the
+      // style/tiles finish loading and it goes idle it stops asking for frames on its own. With
+      // two Map instances sharing the global worker pool/dispatcher (base + compare slots), that
+      // idle transition can land in a state where the basemap tiles are fully loaded (confirmed
+      // via `sourcedata`/`isSourceLoaded`) but the canvas never gets the one extra paint that
+      // would actually draw them — the map silently stays on its pre-tile (black) frame forever,
+      // while our own deck.gl overlay (dots + district outlines) keeps rendering on top just
+      // fine since it repaints unconditionally every tick. Piggybacking a `triggerRepaint()` on
+      // our own already-continuous rAF loop guarantees maplibre gets a fresh paint every frame
+      // too, so it can never get stuck "idle" before it has actually drawn the loaded tiles.
+      this.map.triggerRepaint();
       this.rafHandle = requestAnimationFrame(tick);
     };
     this.rafHandle = requestAnimationFrame(tick);

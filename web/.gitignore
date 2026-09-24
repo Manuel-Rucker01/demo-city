@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Generated at dev-server start / build time by vite.config.ts's copy-maplibre-worker plugin —
+# a verbatim copy of maplibre-gl's worker + its internal maplibre-gl-shared.mjs chunk, always
+# regenerated from whatever maplibre-gl version is installed, never hand-edited.
+public/vendor/
