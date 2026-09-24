@@ -61,8 +61,17 @@ async def test_note_rate_limited_reduces_and_floors():
     limiter = RateLimiter(rpm_limit=100, tps_limit=1000, max_concurrency=10, clock=clock)
     for _ in range(30):
         limiter.note_rate_limited()
+        clock.t += 20.0  # separate congestion signals (beyond the debounce window)
     assert limiter.current_rpm == pytest.approx(10.0)  # floor = 10% of 100
     assert limiter.current_tps == pytest.approx(100.0)  # floor = 10% of 1000
+
+
+async def test_burst_of_429s_backs_off_once():
+    clock = SimClock()
+    limiter = RateLimiter(rpm_limit=100, tps_limit=None, max_concurrency=10, clock=clock)
+    for _ in range(8):  # 8 concurrent 429s in the same instant
+        limiter.note_rate_limited()
+    assert limiter.current_rpm == pytest.approx(70.0)
 
 
 async def test_note_success_recovers_after_a_simulated_minute():

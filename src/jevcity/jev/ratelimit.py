@@ -115,6 +115,7 @@ class RateLimiter:
         self._pause_until: float = 0.0
         self._pause_lock = asyncio.Lock()
         self._last_recovery = self._clock.time()
+        self._last_backoff = float("-inf")
 
     # --- adaptive throttling ------------------------------------------------------------------
 
@@ -124,8 +125,16 @@ class RateLimiter:
         async with self._pause_lock:
             self._pause_until = max(self._pause_until, target)
 
+    _BACKOFF_DEBOUNCE_S = 15.0
+
     def note_rate_limited(self) -> None:
-        """Multiply current rates by 0.7 (floor 10% of configured)."""
+        """Multiply current rates by 0.7 (floor 10% of configured), at most once per
+        _BACKOFF_DEBOUNCE_S: a burst of concurrent 429s is one congestion signal, not N.
+        (Seen live 2026-09-24: 8 simultaneous 429s collapsed the rate to the floor.)"""
+        now = self._clock.time()
+        if now - self._last_backoff < self._BACKOFF_DEBOUNCE_S:
+            return
+        self._last_backoff = now
         if self._configured_rpm is not None and self._requests is not None:
             floor = self._configured_rpm * self._FLOOR_FRACTION
             self._current_rpm = max(self._current_rpm * self._BACKOFF_FACTOR, floor)
