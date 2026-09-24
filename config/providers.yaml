@@ -42,8 +42,9 @@ openrouter:
   wire: systemone
   api_key_env: OPENROUTER_API_KEY
   default_model: typesafe/jev-1.13   # response reports e.g. typesafe/jev-1.13-20260917
-  rpm_limit: 1200                    # TODO: no Jev-specific limit documented; upstream TypeSafe limits assumed
-  tps_limit: 250000                  # TODO: idem
+  rpm_limit: 3000                    # OBSERVED 2026-09-25: 3,624 calls/min sustained, 0 errors (16 in flight);
+  #                                    no Jev limit is documented, the adapter adapts on 429
+  tps_limit: 250000                  # TODO: not documented
   max_context_tokens: 32000          # documented: state + questions
   max_state_plus_question_tokens: null
   max_questions_per_request: 32      # TODO: assumed from the Vercel observation (same upstream)
