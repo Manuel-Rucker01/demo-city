@@ -1,0 +1,12 @@
+name: base
+description: Baseline Barcelona, 5 districts, no policy intervention.
+seed: 42
+ticks: 365
+n_agents: 1000
+data_path: data/processed/districts.json
+jev:
+  mode: mock
+  agents_per_request: 1
+  confidence_threshold: 0.35
+  max_cost_usd: 5.0
+policies: []
