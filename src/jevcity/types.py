@@ -421,7 +421,7 @@ class DistrictSnapshot(BaseModel):
     filled_jobs: int
     shop_revenue: float  # today's
     avg_satisfaction: float
-    avg_rent_burden: float
+    avg_rent_burden: float  # MEDIAN rent/income among renters (name kept for compatibility)
     rent_cap_active: bool
 
 

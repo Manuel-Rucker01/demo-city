@@ -114,10 +114,21 @@ model shows the answers hold up.
 | Field | Source |
 |---|---|
 | Population, age structure | Open Data BCN `pad_mdbas_edat-q` (padró 2025) |
-| Disposable income per capita | Open Data BCN `renda-disponible-llars-bcn` (2023) |
+| Household size | Open Data BCN `pad_dom_mdbas_n-persones` (2025) |
+| Income per capita (disposable) | Open Data BCN `renda-disponible-llars-bcn` (2023) |
+| Income per household (gross) | Open Data BCN `atles-renda-bruta-per-llar` (INE Atlas, 2023) |
+| Average rent of new contracts | Generalitat / INCASÒL rental deposits (2025 annual mean) |
+| Owner-occupied share | Cens de Població i Habitatges (2011, latest district-level table found) |
 | Shops | Open Data BCN `cens-locals-planta-baixa-act-economica` (2024) |
+| Transit score | Derived: density of transit access points (Open Data BCN `transports`, 2025) |
 | District boundaries | Open Data BCN `20170706-districtes-barris` (2017) |
-| **Rent, vacancy, unemployment, jobs per resident, transit** | **Plausible hand-set values**: no district-level open dataset was found |
+| **Unemployment, jobs per resident, vacancy** | **Plausible hand-set values** (unemployment anchored to the 2025 city-wide rate): no machine-readable district-level dataset found |
+
+Population model: every agent is a household head. Ownership follows the district owner share
+exactly, weighted towards older and higher-income households; owners pay a fixed housing cost
+(mortgage if under 55, fees otherwise), get no lease renewals and are unaffected by rent caps.
+Unemployment, tenure and occupation mix match the district inputs exactly (quota allocation),
+so even small runs reproduce them. Median renter rent burden at start: 30–38 % by district.
 
 ## Limitations
 
@@ -129,10 +140,12 @@ This is a demo and a research sandbox, **not a validated model**. Be careful wit
 - **Every run so far is mock.** Decisions come from hand-written priors
   (`src/jevcity/prompts/questions.py`), not from Jev. Mock results say nothing about how Jev would
   decide.
-- **Half the district inputs are invented.** Rent, vacancy, unemployment, job locations and
-  transit are plausible guesses, labelled as such.
-- **Simplified economy.** Everyone rents (no owners), there is no migration in or out of the
-  city, no construction, no tourism or short-term lets, and firms are just job slots. Rent
+- **Some district inputs are still invented.** Unemployment by district, job locations and
+  vacancy are plausible guesses, labelled as such; tenure comes from the 2011 census; the transit
+  score is a crude density proxy (it ranks Gràcia below Nou Barris because Gràcia's area
+  includes large hillside and park areas).
+- **Simplified economy.** Owners never buy (they can only sell and rent), there is no
+  migration in or out of the city, no construction, no tourism or short-term lets, and firms are just job slots. Rent
   dynamics are a vacancy rule with fixed parameters that were tuned by hand to stay in a
   plausible range.
 - **Small numbers.** 1,000 agents means ~130–290 per district, so a handful of moves shifts

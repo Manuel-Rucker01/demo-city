@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import statistics
+
 from jevcity.types import Agent, DistrictId, DistrictSnapshot, Occupation, Tenure, World
 
 _NON_WORKING_AGE = (Occupation.STUDENT, Occupation.RETIRED)
@@ -30,7 +32,8 @@ def build_district_snapshots(world: World, agents: dict[int, Agent]) -> list[Dis
 
         avg_paid_rent = sum(a.rent_monthly for a in renters) / n_renters if n_renters else 0.0
         avg_satisfaction = sum(a.satisfaction for a in residents) / n if n else 0.0
-        avg_rent_burden = sum(a.rent_burden for a in renters) / n_renters if n_renters else 0.0
+        # Median, not mean: agents with (near) zero income have huge burdens that swamp a mean.
+        avg_rent_burden = statistics.median(a.rent_burden for a in renters) if n_renters else 0.0
 
         working_age = [a for a in residents if a.occupation not in _NON_WORKING_AGE]
         unemployment_rate = (
