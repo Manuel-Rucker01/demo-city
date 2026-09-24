@@ -427,15 +427,24 @@ def _cmd_export_web(args: argparse.Namespace) -> int:
         meta = reader.meta()
         summary = reader.summary()
 
-        out_dir = dest_root / meta.run_id
+        # Seed runs of a batch are named s1, s2, ... inside their batch dir: prefix them with
+        # the batch id so seeds from different batches don't overwrite each other on the web.
+        web_id = meta.run_id
+        if engine_batch.read_batch_summary(run_dir.parent) is not None:
+            web_id = f"{run_dir.parent.name}-{run_dir.name}"
+
+        out_dir = dest_root / web_id
         out_dir.mkdir(parents=True, exist_ok=True)
         for fname in ("meta.json", "agents.json", "ticks.ndjson", "summary.json"):
             src = run_dir / fname
             if src.exists():
                 shutil.copy2(src, out_dir / fname)
+        if web_id != meta.run_id:
+            meta_out = meta.model_copy(update={"run_id": web_id})
+            (out_dir / "meta.json").write_text(meta_out.model_dump_json(indent=2), encoding="utf-8")
 
-        index_by_id[meta.run_id] = {
-            "run_id": meta.run_id,
+        index_by_id[web_id] = {
+            "run_id": web_id,
             "scenario": meta.scenario.name,
             "description": meta.scenario.description,
             "ticks": summary.ticks if summary is not None else meta.scenario.ticks,

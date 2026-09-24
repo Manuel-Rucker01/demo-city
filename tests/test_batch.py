@@ -424,3 +424,21 @@ def test_end_to_end_mock_batch_produces_batch_summary(tmp_path):
         "--batch-id", "e2e-mock-batch", "--out", str(tmp_path),
     ])
     assert code2 == 0
+
+
+def test_export_web_prefixes_seed_runs_with_batch_id(tmp_path):
+    """Seeds from two batches (both s1..sN) must not overwrite each other on the web."""
+    import json as _json
+
+    from jevcity.cli import main
+
+    runs = tmp_path / "runs"
+    for b in ("batch-a", "batch-b"):
+        assert main(["batch", "--scenario", "scenarios/base.yaml", "--seeds", "1", "--agents", "20",
+                     "--ticks", "3", "--provider", "mock", "--batch-id", b, "--out", str(runs)]) == 0
+    dest = tmp_path / "web" / "public" / "runs"
+    assert main(["export-web", str(runs / "batch-a"), str(runs / "batch-b"), "--dest", str(dest),
+                 "--geojson", str(tmp_path / "none.geojson")]) == 0
+    ids = {e["run_id"] for e in _json.loads((dest / "index.json").read_text())}
+    assert {"batch-a-s1", "batch-b-s1"} <= ids
+    assert _json.loads((dest / "batch-a-s1" / "meta.json").read_text())["run_id"] == "batch-a-s1"
