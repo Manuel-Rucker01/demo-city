@@ -80,6 +80,25 @@ Modelling assumptions (documented here for the README limitations section):
 - `spending_level` and `satisfaction` are Beta-distributed: spending shifts up with wage
   percentile; satisfaction shifts down as rent/housing-cost burden (burden / income)
   increases.
+- **Satisfaction calibration** (`SATISFACTION_BURDEN_INTERCEPT` / `_SLOPE` /
+  `SATISFACTION_CONCENTRATION` below): `mean_sat = clip(SATISFACTION_BURDEN_INTERCEPT -
+  SATISFACTION_BURDEN_SLOPE * rent_burden, 0.05, 0.95)`, then Beta-distributed around that
+  mean with `SATISFACTION_CONCENTRATION`. These constants are fit to how Jev itself judges
+  satisfaction, not guessed: a real 1,000-agent/365-day OpenRouter run (`runs/base-or/`)
+  showed mean satisfaction climbing from ~0.58 (this generator's old `0.75 - 0.8*burden`
+  formula) to ~0.87 within ~90 days with no shocks, because Jev's own satisfaction answers
+  (and `world/market.py`'s burden-implied drift target) run much higher for a given rent
+  burden than the old formula assumed. Fit: bucket every agent's *first* Jev satisfaction
+  answer in that run by their rent-burden bucket at the time (`legend`-normalized score,
+  i.e. `score / (len(legend) - 1)`), giving (burden midpoint, mean, sd):
+  (7.5%, 0.815, 0.17), (20%, 0.684, 0.18), (30%, 0.590, 0.18), (40%, 0.484, 0.20),
+  (52.5%, 0.303, 0.19), (70%, 0.063, 0.12) -- a least-squares fit of `mean` against `burden`
+  gives intercept≈0.93, slope≈-1.20 (R^2 residuals within ~0.03 of every bucket mean); the
+  observed sd (~0.17 average, tighter at the extremes) is close to what
+  `Beta(mean*conc, (1-mean)*conc)` gives at `conc≈6` (vs the previous `conc=8`, which was
+  narrower than Jev's own spread, especially near 0 and 1). `world/market.py`'s daily
+  satisfaction-drift baseline reuses these same two constants (imported from here) so a
+  shock-free run stays flat instead of drifting toward a mismatched target.
 
 Everything here is grouped per district (5-100 districts, not 10_000 agents) and vectorized
 with numpy within each district, so it stays well under 1s for 10_000 agents.
@@ -140,6 +159,18 @@ CHILDREN_MAX_AGE = 55
 CHILDREN_MIN = 1
 CHILDREN_MAX = 3
 WALK_HOME_JOB_BOOST = 3.0  # relative propensity to walk when job_district == home district
+
+# --- satisfaction calibration (fit to runs/base-or/, see module docstring) -----------------
+SATISFACTION_BURDEN_INTERCEPT = 0.93
+SATISFACTION_BURDEN_SLOPE = 1.20
+SATISFACTION_CONCENTRATION = 6.0  # Beta concentration (was 8.0; Jev's own spread is wider)
+
+# --- commute habit (Agent.commute_since_tick; see module docstring / EventParams docs) -----
+TICKS_PER_YEAR = 360  # kept in sync with prompts/buckets.py and prompts/questions.py
+COMMUTE_HABIT_MEDIAN_YEARS = 3.0  # plausible: about as long as the median job tenure
+COMMUTE_HABIT_SIGMA = 0.6
+COMMUTE_HABIT_MIN_YEARS = 0.1
+COMMUTE_HABIT_MAX_YEARS = 30.0
 
 # Shopping place plausible split (see module docstring): most spend locally; a minority goes
 # online (skewed younger / higher income), to their work district, or to the centre.
@@ -483,8 +514,11 @@ def _generate_district(
     conc = 8.0
     spending_level = rng.beta(mean_spend * conc, (1.0 - mean_spend) * conc)
 
-    mean_sat = np.clip(0.75 - 0.8 * rent_burden, 0.05, 0.95)
-    satisfaction = rng.beta(mean_sat * conc, (1.0 - mean_sat) * conc)
+    mean_sat = np.clip(
+        SATISFACTION_BURDEN_INTERCEPT - SATISFACTION_BURDEN_SLOPE * rent_burden, 0.05, 0.95
+    )
+    sat_conc = SATISFACTION_CONCENTRATION
+    satisfaction = rng.beta(mean_sat * sat_conc, (1.0 - mean_sat) * sat_conc)
 
     # --- children: exact quota among household_size>=2 agents aged 25-55 -----------------
     children = np.zeros(cnt, dtype=int)
@@ -518,6 +552,20 @@ def _generate_district(
     commute_mode = np.empty(cnt, dtype=object)
     commute_mode[:] = None
     commute_mode[employed_idx] = commute_modes_emp
+
+    # --- commute_since_tick: how long each commuter has used their current mode (habit) ---
+    # Negative ticks = the habit predates the simulation start (see Agent.commute_since_tick
+    # docstring); only set for agents who actually have a commute_mode. Plausible spread
+    # (median ~COMMUTE_HABIT_MEDIAN_YEARS) since Open Data BCN has no commute-tenure dataset.
+    commute_since_tick = np.full(cnt, None, dtype=object)
+    n_emp = len(employed_idx)
+    if n_emp:
+        habit_years = np.clip(
+            rng.lognormal(mean=np.log(COMMUTE_HABIT_MEDIAN_YEARS), sigma=COMMUTE_HABIT_SIGMA, size=n_emp),
+            COMMUTE_HABIT_MIN_YEARS,
+            COMMUTE_HABIT_MAX_YEARS,
+        )
+        commute_since_tick[employed_idx] = -np.round(habit_years * TICKS_PER_YEAR).astype(int)
 
     # --- shopping_place: plausible split, skewed by age/income/employment (see docstring) --
     age_norm = np.clip(ages / 60.0, 0.0, 1.0)
@@ -564,6 +612,9 @@ def _generate_district(
                 children=int(children[i]),
                 has_car=bool(has_car[i]),
                 commute_mode=commute_mode[i],
+                commute_since_tick=(
+                    None if commute_since_tick[i] is None else int(commute_since_tick[i])
+                ),
                 shopping_place=shopping_place[i],
             )
         )
@@ -674,8 +725,11 @@ def spawn_arrivals(
     conc = 8.0
     mean_spend = np.clip(0.3 + 0.4 * percentile, 0.05, 0.95)
     spending_level = rng.beta(mean_spend * conc, (1.0 - mean_spend) * conc)
-    mean_sat = np.clip(0.75 - 0.8 * rent_burden, 0.05, 0.95)
-    satisfaction = rng.beta(mean_sat * conc, (1.0 - mean_sat) * conc)
+    mean_sat = np.clip(
+        SATISFACTION_BURDEN_INTERCEPT - SATISFACTION_BURDEN_SLOPE * rent_burden, 0.05, 0.95
+    )
+    sat_conc = SATISFACTION_CONCENTRATION
+    satisfaction = rng.beta(mean_sat * sat_conc, (1.0 - mean_sat) * sat_conc)
 
     agents: list[Agent] = []
     for i in range(n):

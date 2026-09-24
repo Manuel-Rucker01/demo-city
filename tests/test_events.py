@@ -352,45 +352,111 @@ def test_school_year_fires_only_for_parents_on_the_right_tick(profiles):
 # --- transit change --------------------------------------------------------------------------
 
 
-def test_transit_change_fires_once_when_boost_changes(profiles):
+def _collect_transit_events(world, agents_dict, params, start_tick, n_ticks):
+    """Run detect_events for n_ticks starting at start_tick, collecting every TRANSIT_CHANGE
+    event fired -> {agent_id: (tick, kind)}. Errors if an agent fires more than once."""
+    by_agent: dict[int, tuple[int, str]] = {}
     rng = np.random.default_rng(0)
-    home_agent = make_agent(0, profiles[0].id, employed=False)
-    job_agent = make_agent(1, profiles[1].id, employed=True, job_district=profiles[0].id)
-    unrelated = make_agent(2, profiles[2].id, employed=False)
-    world = init_world(profiles, [home_agent, job_agent, unrelated])
-    agents_dict = {a.id: a for a in [home_agent, job_agent, unrelated]}
-    params = EventParams(job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0)
+    for t in range(start_tick, start_tick + n_ticks):
+        events = detect_events(world, agents_dict, tick=t, params=params, rng=rng)
+        for e in events:
+            if e.kind != EventKind.TRANSIT_CHANGE:
+                continue
+            assert e.agent_id not in by_agent, "agent fired TRANSIT_CHANGE more than once"
+            by_agent[e.agent_id] = (t, e.payload["kind"])
+    return by_agent
 
-    # tick 1: establishes the cache baseline, no event yet
-    events1 = detect_events(world, agents_dict, tick=1, params=params, rng=rng)
+
+def test_transit_change_awareness_spreads_over_the_window_not_instant(profiles):
+    """A new line shouldn't make every affected commuter reconsider the day it opens (the
+    realism bug this fixes): with awareness_days > 1, affected agents' events land on
+    different days within [start, start + awareness_days), not all on the opening tick."""
+    awareness_days = 30
+    agents = [
+        make_agent(i, profiles[0].id, employed=False, occupation=Occupation.RETIRED)
+        for i in range(200)
+    ]
+    unrelated = make_agent(1000, profiles[2].id, employed=False, occupation=Occupation.RETIRED)
+    agents.append(unrelated)
+    world = init_world(profiles, agents)
+    agents_dict = {a.id: a for a in agents}
+    params = EventParams(
+        job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0,
+        transit_awareness_days=awareness_days,
+    )
+
+    rng0 = np.random.default_rng(0)
+    events1 = detect_events(world, agents_dict, tick=1, params=params, rng=rng0)  # baseline
     assert not any(e.kind == EventKind.TRANSIT_CHANGE for e in events1)
 
-    # the boost changes on district 0 (home of agent 0, job district of agent 1)
+    # District 0's transit_boost increases at tick 2 -- affects agents 0..199 (home there),
+    # not agent 1000 (a different district).
     world.states[profiles[0].id].transit_boost = 0.2
-    events2 = detect_events(world, agents_dict, tick=2, params=params, rng=rng)
-    transit_events = {e.agent_id: e.payload for e in events2 if e.kind == EventKind.TRANSIT_CHANGE}
-    assert set(transit_events.keys()) == {0, 1}
-    assert transit_events[0]["kind"] == "new_line"
-    assert 2 not in transit_events
+    fired = _collect_transit_events(world, agents_dict, params, start_tick=2, n_ticks=awareness_days + 5)
 
-    # unchanged next tick: must not refire
-    events3 = detect_events(world, agents_dict, tick=3, params=params, rng=rng)
-    assert not any(e.kind == EventKind.TRANSIT_CHANGE for e in events3)
+    assert set(fired) == set(range(200))  # every affected agent fires, exactly once each
+    assert 1000 not in fired  # unrelated district's agent never fires
+
+    ticks_seen = {t for t, _kind in fired.values()}
+    assert len(ticks_seen) > 1, "all affected agents fired on the same day"
+    assert all(2 <= t < 2 + awareness_days for t, _ in fired.values())
+    assert all(kind == "new_line" for _, kind in fired.values())
+
+
+def test_transit_change_awareness_is_deterministic(profiles):
+    """Same seed/inputs -> the same per-agent awareness day (no dependence on the shared rng,
+    only on agent id / kind / the tick the change started)."""
+    awareness_days = 20
+
+    def run():
+        agents = [make_agent(i, profiles[0].id, employed=False) for i in range(50)]
+        world = init_world(profiles, agents)
+        agents_dict = {a.id: a for a in agents}
+        params = EventParams(
+            job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0,
+            transit_awareness_days=awareness_days,
+        )
+        detect_events(world, agents_dict, tick=1, params=params, rng=np.random.default_rng(0))
+        world.states[profiles[0].id].transit_boost = 0.2
+        return _collect_transit_events(world, agents_dict, params, start_tick=2, n_ticks=awareness_days + 2)
+
+    assert run() == run()
 
 
 def test_low_emission_zone_change_fires_with_correct_payload(profiles):
-    rng = np.random.default_rng(0)
+    awareness_days = 15
     agent = make_agent(0, profiles[0].id, employed=False)
     world = init_world(profiles, [agent])
     agents_dict = {0: agent}
-    params = EventParams(job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0)
+    params = EventParams(
+        job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0,
+        transit_awareness_days=awareness_days,
+    )
 
-    detect_events(world, agents_dict, tick=1, params=params, rng=rng)  # baseline
+    rng0 = np.random.default_rng(0)
+    detect_events(world, agents_dict, tick=1, params=params, rng=rng0)  # baseline
     world.states[profiles[0].id].low_emission_zone = True
-    events = detect_events(world, agents_dict, tick=2, params=params, rng=rng)
-    lez_events = [e for e in events if e.kind == EventKind.TRANSIT_CHANGE and e.payload.get("kind") == "low_emission_zone"]
-    assert len(lez_events) == 1
-    assert lez_events[0].agent_id == 0
+    fired = _collect_transit_events(world, agents_dict, params, start_tick=2, n_ticks=awareness_days + 2)
+    assert fired == {0: (fired[0][0], "low_emission_zone")}
+    assert 2 <= fired[0][0] < 2 + awareness_days
+
+
+def test_transit_change_awareness_days_1_fires_immediately(profiles):
+    """transit_awareness_days<=1 preserves the old "everyone notices on day one" behaviour."""
+    home_agent = make_agent(0, profiles[0].id, employed=False)
+    job_agent = make_agent(1, profiles[1].id, employed=True, job_district=profiles[0].id)
+    world = init_world(profiles, [home_agent, job_agent])
+    agents_dict = {a.id: a for a in [home_agent, job_agent]}
+    params = EventParams(
+        job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0,
+        transit_awareness_days=1,
+    )
+    rng0 = np.random.default_rng(0)
+    detect_events(world, agents_dict, tick=1, params=params, rng=rng0)
+    world.states[profiles[0].id].transit_boost = 0.2
+    events2 = detect_events(world, agents_dict, tick=2, params=params, rng=rng0)
+    transit_events = {e.agent_id for e in events2 if e.kind == EventKind.TRANSIT_CHANGE}
+    assert transit_events == {0, 1}
 
 
 # --- tourism pressure ------------------------------------------------------------------------

@@ -49,12 +49,12 @@ from __future__ import annotations
 from jevcity.prompts.buckets import (
     affordability_label,
     affordability_text,
+    commute_habit_text,
     commute_text,
     housing_text,
     job_market_text,
     lez_note_text,
     monthly_expenses,
-    own_commute_length_text,
     rent_trend_text,
     satisfaction_bucket,
     savings_text,
@@ -223,7 +223,9 @@ def _person_block(agent: Agent, world: World, tick: int) -> dict:
     if agent.has_car:
         block["car"] = "yes"
     if agent.commute_mode is not None:
-        block["commute"] = f"{agent.commute_mode.value} {own_commute_length_text(agent, world)}"
+        # Mode + how long they've commuted this way (habit; see Agent.commute_since_tick) --
+        # trip length is already implicit in the home district's `jobs` "commute" field.
+        block["commute"] = f"{agent.commute_mode.value}, {commute_habit_text(tick, agent.commute_since_tick)}"
     return block
 
 

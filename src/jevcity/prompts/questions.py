@@ -34,6 +34,9 @@ from jevcity.types import (
 )
 
 OWNER_MOVE_PRIOR_FACTOR = 0.2  # owners are much less likely to move than renters
+TICKS_PER_YEAR = 360  # kept in sync with population/generator.py and buckets.py
+COMMUTE_HABIT_STICKINESS_PER_YEAR = 0.5  # extra weight on the current mode per year of habit
+COMMUTE_HABIT_MAX_YEARS = 6.0  # habit stickiness saturates here (well-worn routine)
 
 ACTION_INSTRUCTIONS = (
     "What will this person most likely do today given their situation and today's events?"
@@ -249,7 +252,7 @@ def mock_priors_for_agent(
         "destination": dest_w,
         "spending": {str(i): w for i, w in enumerate(spending_w)},
         "satisfaction": {str(i): w for i, w in enumerate(sat_w)},
-        "commute_mode": _commute_mode_weights(agent),
+        "commute_mode": _commute_mode_weights(agent, world.tick),
         "shopping_place": _shopping_place_weights(),
     }
 
@@ -274,12 +277,23 @@ def _destination_weights(
     return weights
 
 
-def _commute_mode_weights(agent: Agent) -> dict[str, float]:
+def _commute_mode_weights(agent: Agent, tick: int) -> dict[str, float]:
+    """Mock priors for the commute_mode question. Beyond the plain mode-popularity weights,
+    a commuter's *current* mode gets extra "sticky" weight proportional to how long they've
+    been doing it (Agent.commute_since_tick) -- people who've commuted the same way for years
+    are less likely to switch than one about to try something new (see the metro-line launch
+    realism fix in the final report: without this, mock runs over-predict mode switching)."""
     modes = [m for m in CommuteMode if agent.has_car or m is not CommuteMode.CAR]
     weights = {m.value: 1.0 for m in modes}
     weights[CommuteMode.METRO.value] = 3.0
     if agent.has_car:
         weights[CommuteMode.CAR.value] = 2.0
+    if agent.commute_mode is not None and agent.commute_mode.value in weights:
+        habit_years = 0.0
+        if agent.commute_since_tick is not None:
+            habit_years = max(tick - agent.commute_since_tick, 0) / TICKS_PER_YEAR
+        stickiness = 1.0 + min(habit_years, COMMUTE_HABIT_MAX_YEARS) * COMMUTE_HABIT_STICKINESS_PER_YEAR
+        weights[agent.commute_mode.value] *= stickiness
     return weights
 
 

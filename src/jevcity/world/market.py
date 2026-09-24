@@ -146,6 +146,7 @@ OWNER_EQUITY_CAP = 500_000.0
 TRANSIT_SATISFACTION_WEIGHT = 0.05  # nudge on the satisfaction baseline for good transit
 TOURISM_SATISFACTION_WEIGHT = 0.15  # nudge down for a high tourist share of the housing stock
 SHOP_CLOSURE_SATISFACTION_PENALTY = 0.05  # flat hit to residents the month local shops close
+SATISFACTION_INERTIA_WEIGHT = 0.3  # how much a single Jev answer moves satisfaction (see below)
 
 
 def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
@@ -339,7 +340,7 @@ def apply_decisions(
                         agent.savings += equity - market.moving_cost
                         if was_owner:
                             agent.tenure = Tenure.RENTER
-                        transport.switch_mode_on_move(agent)
+                        transport.switch_mode_on_move(agent, tick)
         elif decision.action == Action.JOB_SEARCH and not agent.employed:
             home_state = world.states.get(agent.home)
             best_state = None
@@ -369,9 +370,20 @@ def apply_decisions(
             agent.spending_level = clip(agent.spending_level + 0.1, 0.0, 1.0)
         elif decision.action == Action.SAVE:
             agent.spending_level = clip(agent.spending_level - 0.1, 0.0, 1.0)
-        agent.satisfaction = clip(decision.satisfaction, 0.0, 1.0)
+        # Inertia, not a full overwrite: Jev's per-decision satisfaction answer nudges the
+        # agent's satisfaction by SATISFACTION_INERTIA_WEIGHT rather than replacing it -- a
+        # blunt overwrite (the old behaviour) let each answer fully reset satisfaction, and
+        # combined with Jev's own answers running high for a given situation (see
+        # population/generator.py's calibration note), that ratcheted city-wide satisfaction
+        # up every time an agent got a decision, regardless of whether anything changed.
+        agent.satisfaction = clip(
+            (1.0 - SATISFACTION_INERTIA_WEIGHT) * agent.satisfaction
+            + SATISFACTION_INERTIA_WEIGHT * decision.satisfaction,
+            0.0,
+            1.0,
+        )
 
-        transport.apply_commute_decision(agent, decision.commute_mode)
+        transport.apply_commute_decision(agent, decision.commute_mode, tick)
         if decision.shopping_place is not None:
             agent.shopping_place = decision.shopping_place
 
@@ -575,7 +587,18 @@ def daily_update_ex(
             agent.days_unemployed += 1
 
         burden = agent.rent_burden
-        baseline = clip(1.0 - min(burden, 1.5) / 1.5, 0.0, 1.0)
+        # Same burden -> satisfaction curve the generator uses for the initial population
+        # (population_generator.SATISFACTION_BURDEN_INTERCEPT/_SLOPE, fit to runs/base-or/ --
+        # see that module's docstring). A shock-free run's drift target now matches agents'
+        # calibrated starting point instead of a steeper, uncalibrated "1 - burden/1.5" curve
+        # that used to pull satisfaction up toward ~0.8 for a typical ~30% burden regardless
+        # of what agents actually started at.
+        baseline = clip(
+            population_generator.SATISFACTION_BURDEN_INTERCEPT
+            - population_generator.SATISFACTION_BURDEN_SLOPE * burden,
+            0.0,
+            1.0,
+        )
         if home_state is not None:
             profile = world.profiles.get(agent.home)
             transit_score = profile.transit_score if profile is not None else 0.0

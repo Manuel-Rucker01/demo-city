@@ -256,6 +256,19 @@ def own_commute_length_text(agent: Agent, world: World) -> str:
     return commute_text(agent, agent.home, world)
 
 
+def commute_habit_text(tick: int, commute_since_tick: int | None) -> str:
+    """Compact "how long they've commuted this way" label for the person block's `commute`
+    field, e.g. "6y" / "<1y" (see Agent.commute_since_tick; None = never explicitly set,
+    e.g. a hand-built test agent -> treated as brand new)."""
+    if commute_since_tick is None:
+        return "<1y"
+    days = max(tick - commute_since_tick, 0)
+    years = days / (TICKS_PER_MONTH * 12)
+    if years < 1:
+        return "<1y"
+    return f"{round(years)}y"
+
+
 # --- tourism / local commerce / transit boost / LEZ (new district-state fields) -----------
 
 

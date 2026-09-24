@@ -15,6 +15,9 @@ from jevcity.population.generator import (
     DEFAULT_CHILDREN_SHARE,
     DEFAULT_COMMUTE_MODE_SHARE,
     DEFAULT_OWNER_SHARE,
+    SATISFACTION_BURDEN_INTERCEPT,
+    SATISFACTION_BURDEN_SLOPE,
+    TICKS_PER_YEAR,
     _largest_remainder,
     generate_population,
     spawn_arrivals,
@@ -388,6 +391,66 @@ def test_spawn_arrivals_respects_rent_cap(profiles):
     for a in arrivals:
         if a.home == target and a.tenure is Tenure.RENTER:
             assert a.rent_monthly <= 1.0 + 1e-9
+
+
+# --- satisfaction calibration (fit to runs/base-or/, see generator module docstring) -----
+
+
+def test_initial_satisfaction_matches_burden_calibration(profiles):
+    """Population-level mean satisfaction, bucketed by rent burden, should track the
+    SATISFACTION_BURDEN_INTERCEPT/_SLOPE curve fit to Jev's own answers in runs/base-or/ --
+    not the old, uncalibrated `0.75 - 0.8*burden` formula that started far below what Jev
+    itself judges for a given burden (see final report for the numbers)."""
+    rng = np.random.default_rng(7)
+    agents = generate_population(profiles, N_LARGE, rng)
+    buckets: dict[int, list[float]] = {}
+    for a in agents:
+        if a.income_monthly <= 0:
+            continue
+        b = round(min(a.rent_burden, 0.9), 1)
+        buckets.setdefault(b, []).append(a.satisfaction)
+    for b, sats in buckets.items():
+        if len(sats) < 20:
+            continue
+        expected = max(0.05, min(0.95, SATISFACTION_BURDEN_INTERCEPT - SATISFACTION_BURDEN_SLOPE * b))
+        assert abs(sum(sats) / len(sats) - expected) < 0.08, f"burden~{b}: {sum(sats)/len(sats):.3f}"
+
+
+def test_initial_satisfaction_mean_well_above_old_formula(profiles):
+    """Sanity check against the specific regression this fixes: the old formula
+    (0.75 - 0.8*burden) gave a population mean around 0.55-0.60 for this fixture's district
+    mix; the calibrated formula should be noticeably higher (it must no longer start far below
+    the level Jev itself reports for comparable agents, which is what caused the runaway
+    climb -- see runs/base-or/agents.json's actual initial mean of 0.577)."""
+    rng = np.random.default_rng(8)
+    agents = generate_population(profiles, N_LARGE, rng)
+    mean_sat = sum(a.satisfaction for a in agents) / len(agents)
+    assert mean_sat > 0.60
+
+
+# --- commute habit (Agent.commute_since_tick) ---------------------------------------------
+
+
+def test_commute_since_tick_set_for_commuters_only(profiles):
+    rng = np.random.default_rng(41)
+    agents = generate_population(profiles, N_LARGE, rng)
+    for a in agents:
+        if a.commute_mode is not None:
+            assert a.commute_since_tick is not None
+            assert a.commute_since_tick < 0  # habit predates the sim start
+            assert a.commute_since_tick >= -30 * TICKS_PER_YEAR  # within the plausible cap
+        else:
+            assert a.commute_since_tick is None
+
+
+def test_commute_since_tick_plausible_spread(profiles):
+    rng = np.random.default_rng(43)
+    agents = generate_population(profiles, N_LARGE, rng)
+    years = [-a.commute_since_tick / TICKS_PER_YEAR for a in agents if a.commute_since_tick is not None]
+    assert years  # some commuters exist
+    mean_years = sum(years) / len(years)
+    assert 1.0 < mean_years < 6.0  # a plausible median-ish range, not a single fixed value
+    assert len({round(y, 1) for y in years}) > 10  # actually spread, not a constant
 
 
 def test_spawn_arrivals_performance(profiles):

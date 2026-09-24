@@ -67,6 +67,7 @@ def make_agent(
     children: int = 0,
     has_car: bool = False,
     commute_mode: CommuteMode | None = None,
+    commute_since_tick: int | None = None,
     shopping_place: ShoppingPlace = ShoppingPlace.LOCAL,
 ) -> Agent:
     return Agent(
@@ -88,6 +89,7 @@ def make_agent(
         children=children,
         has_car=has_car,
         commute_mode=commute_mode,
+        commute_since_tick=commute_since_tick,
         shopping_place=shopping_place,
     )
 
@@ -224,6 +226,31 @@ class TestBuildRequestsK1:
         assert "owns their home outright" in texts[2]
         assert "housing cost takes" in texts[2]
 
+    def test_person_commute_field_shows_mode_and_habit_years(self, profiles):
+        world = make_world(profiles)
+        long_habit = make_agent(
+            1, home="eixample", employed=True, commute_mode=CommuteMode.CAR,
+            commute_since_tick=100 - 6 * 360,  # ~6 years before tick 100
+        )
+        new_habit = make_agent(
+            2, home="eixample", employed=True, commute_mode=CommuteMode.METRO,
+            commute_since_tick=95,  # 5 ticks ago, well under a year
+        )
+        events = [Event(agent_id=1, kind=EventKind.PAYDAY), Event(agent_id=2, kind=EventKind.PAYDAY)]
+        reqs = build_requests(
+            world, {1: long_habit, 2: new_habit}, events, tick=100, agents_per_request=1
+        )
+        texts = {r.agent_ids[0]: r.state["person"]["commute"] for r in reqs}
+        assert texts[1] == "car, 6y"
+        assert texts[2] == "metro, <1y"
+
+    def test_person_commute_field_absent_when_no_commute_mode(self, profiles):
+        world = make_world(profiles)
+        agent = make_agent(1, home="eixample", employed=False, commute_mode=None)
+        events = [Event(agent_id=1, kind=EventKind.PAYDAY)]
+        reqs = build_requests(world, {1: agent}, events, tick=100, agents_per_request=1)
+        assert "commute" not in reqs[0].state["person"]
+
 
 class TestBuildRequestsKN:
     def test_packing_and_people_keys(self, profiles):
@@ -291,6 +318,25 @@ class TestMockPriors:
         p_renter = mock_priors_for_agent(renter, [], world)
         p_owner = mock_priors_for_agent(owner, [], world)
         assert p_owner["action"][Action.MOVE.value] < p_renter["action"][Action.MOVE.value]
+
+    def test_commute_habit_makes_switching_less_likely(self, profiles):
+        """A long-standing commute habit should make the mock backend more likely to keep the
+        agent's current mode (relative to a brand-new commuter with the same current mode) --
+        see the new-metro-line realism fix in the final report."""
+        world = make_world(profiles)  # world.tick == 100
+        long_habit = make_agent(
+            1, home="eixample", employed=True, commute_mode=CommuteMode.CAR, has_car=True,
+            commute_since_tick=100 - 6 * 360,
+        )
+        new_habit = make_agent(
+            2, home="eixample", employed=True, commute_mode=CommuteMode.CAR, has_car=True,
+            commute_since_tick=99,
+        )
+        p_long = mock_priors_for_agent(long_habit, [], world)
+        p_new = mock_priors_for_agent(new_habit, [], world)
+        assert (
+            p_long["commute_mode"][CommuteMode.CAR.value] > p_new["commute_mode"][CommuteMode.CAR.value]
+        )
 
     def test_priors_cover_all_question_names_and_options(self, profiles):
         world = make_world(profiles)

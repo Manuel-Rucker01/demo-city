@@ -36,8 +36,15 @@ plain loop over the (typically small) set of triggered agents.
   dict[DistrictId, ...], lazily seeded on first call without firing - same pattern as
   `_prev_rent_burden`) hold the previous tick's values per district. A district's
   `transit_boost` increasing fires `kind="new_line"`; `low_emission_zone` flipping
-  False->True fires `kind="low_emission_zone"`. Fires once, the tick it changes, for every
-  agent whose `home` or `job_district` is in the affected district(s) (deterministic, no rng).
+  False->True fires `kind="low_emission_zone"`. **Awareness is spread, not instant**: instead
+  of firing for every affected agent the tick the district state changes (unrealistic - "the
+  whole neighbourhood notices a new metro line on opening day"), each affected agent is
+  scheduled to notice on one deterministic pseudo-random day in
+  `[tick, tick + params.transit_awareness_days)`, seeded by `(agent_id, kind, tick)` (see
+  `_awareness_offset`) so it's reproducible without consuming the shared rng. Scheduled
+  (agent_id, kind) pairs live in `world._pending_transit_awareness`
+  (dict[int tick -> list[(agent_id, kind)]]), popped and fired on the day they're due. Each
+  affected agent is scheduled (and later fires) exactly once per district-level change.
 - SHOP_CLOSED: another World-cached dict, `world._prev_shops_open` (per district, same lazy
   seeding), detects `state.shops_open` dropping tick over tick (shops only actually change on
   month boundaries in `world/market.py`, so this only ever fires around those boundaries).
@@ -49,6 +56,8 @@ plain loop over the (typically small) set of triggered agents.
 
 from __future__ import annotations
 
+import hashlib
+
 import numpy as np
 
 from jevcity.types import Agent, DistrictId, Event, EventKind, EventParams, Tenure, World
@@ -59,6 +68,17 @@ RENEWAL_INCREASE_CAP_DEFAULT = 0.10  # kept in sync with world/market.py's const
 LIFE_EVENT_KINDS = ("new_child", "partner", "health", "inheritance")
 SCHOOL_YEAR_CYCLE_TICKS = 365
 SHOP_CLOSED_FIRE_PROB = 0.3  # w.p. a resident of a district with fewer shops_open gets the event
+
+
+def _awareness_offset(agent_id: int, kind: str, start_tick: int, awareness_days: int) -> int:
+    """Deterministic pseudo-random day offset in [0, awareness_days) for when `agent_id`
+    notices a `kind` transit/LEZ change that started at `start_tick`. Seeded by the inputs
+    (not the shared rng) so it's reproducible without consuming a draw from it and without
+    needing the scenario seed here."""
+    if awareness_days <= 1:
+        return 0
+    digest = hashlib.sha256(f"{agent_id}:{kind}:{start_tick}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") % awareness_days
 
 
 def detect_events(
@@ -117,6 +137,16 @@ def detect_events(
     if prev_shops_open is None:
         prev_shops_open = {}
         world._prev_shops_open = prev_shops_open  # type: ignore[attr-defined]
+
+    pending_transit: dict[int, list[tuple[int, str]]] | None = getattr(
+        world, "_pending_transit_awareness", None
+    )
+    if pending_transit is None:
+        pending_transit = {}
+        world._pending_transit_awareness = pending_transit  # type: ignore[attr-defined]
+    due_today: dict[int, list[str]] = {}
+    for aid, kind in pending_transit.pop(tick, []):
+        due_today.setdefault(aid, []).append(kind)
 
     transit_changed: set[DistrictId] = set()
     lez_started: set[DistrictId] = set()
@@ -241,14 +271,23 @@ def detect_events(
                         )
                     )
 
-        affected_transit = {d for d in (agent.home, agent.job_district) if d is not None and d in transit_changed}
-        if affected_transit:
-            events.append(Event(agent_id=aid, kind=EventKind.TRANSIT_CHANGE, payload={"kind": "new_line"}))
-        affected_lez = {d for d in (agent.home, agent.job_district) if d is not None and d in lez_started}
-        if affected_lez:
-            events.append(
-                Event(agent_id=aid, kind=EventKind.TRANSIT_CHANGE, payload={"kind": "low_emission_zone"})
-            )
+        # Fire today's due (previously scheduled) transit-awareness events for this agent.
+        for kind in due_today.get(aid, ()):
+            events.append(Event(agent_id=aid, kind=EventKind.TRANSIT_CHANGE, payload={"kind": kind}))
+
+        # Schedule awareness for a district-level change detected this tick, spread over
+        # params.transit_awareness_days (see module docstring / _awareness_offset). An offset
+        # of 0 means "notices today" -- fire it directly, since `pending_transit[tick]` was
+        # already popped above and would otherwise never be revisited.
+        if transit_changed or lez_started:
+            agent_districts = {d for d in (agent.home, agent.job_district) if d is not None}
+            for kind, changed in (("new_line", transit_changed), ("low_emission_zone", lez_started)):
+                if agent_districts & changed:
+                    offset = _awareness_offset(aid, kind, tick, params.transit_awareness_days)
+                    if offset == 0:
+                        events.append(Event(agent_id=aid, kind=EventKind.TRANSIT_CHANGE, payload={"kind": kind}))
+                    else:
+                        pending_transit.setdefault(tick + offset, []).append((aid, kind))
 
         closed_pct = shops_closed_pct.get(agent.home)
         if closed_pct is not None and shop_closed_draws[idx] < SHOP_CLOSED_FIRE_PROB:

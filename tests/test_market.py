@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+import statistics as st
 import time
+from collections import defaultdict
 
 import numpy as np
 import pytest
 
+from jevcity.population.generator import generate_population
 from jevcity.types import (
     Action,
     Agent,
     AgentDecision,
+    CommuteMode,
     MarketParams,
+    MigrationParams,
     Occupation,
     RentCapPolicy,
     Scenario,
@@ -455,3 +460,133 @@ def test_performance_daily_update_10000_agents(profiles):
     daily_update(world, agents_dict, scenario, 1, rng)
     elapsed = time.perf_counter() - start
     assert elapsed < 0.05
+
+
+# --- satisfaction: inertia + flat no-shock drift (realism fix) --------------------------
+
+
+def test_satisfaction_decision_uses_inertia_not_overwrite(profiles):
+    """apply_decisions must nudge satisfaction toward the Jev answer by
+    SATISFACTION_INERTIA_WEIGHT, not replace it outright (the old, overwrite-every-decision
+    behaviour was the main driver of the runaway satisfaction climb -- see final report)."""
+    from jevcity.world.market import SATISFACTION_INERTIA_WEIGHT
+
+    rng = np.random.default_rng(1)
+    agent = make_agent(0, profiles[0].id, satisfaction=0.4)
+    world = init_world(profiles, [agent])
+    agents_dict = {0: agent}
+    scenario = make_scenario()
+    decision = AgentDecision(
+        agent_id=0, tick=1, action=Action.STAY, destination=None,
+        spending=0.5, satisfaction=1.0, confidence=0.9,  # Jev says "very happy"
+    )
+    apply_decisions(world, agents_dict, [decision], scenario, rng, 1)
+    expected = (1 - SATISFACTION_INERTIA_WEIGHT) * 0.4 + SATISFACTION_INERTIA_WEIGHT * 1.0
+    assert agent.satisfaction == pytest.approx(expected)
+    assert agent.satisfaction < 1.0  # not a full overwrite
+
+
+def test_satisfaction_inertia_is_idempotent_when_answer_matches_current(profiles):
+    """A decision that just reaffirms the agent's own current satisfaction is a no-op under
+    inertia (used by test_market.py's stay_decision() helper throughout this file)."""
+    rng = np.random.default_rng(1)
+    agent = make_agent(0, profiles[0].id, satisfaction=0.55)
+    world = init_world(profiles, [agent])
+    agents_dict = {0: agent}
+    scenario = make_scenario()
+    apply_decisions(world, agents_dict, [stay_decision(agent, 1)], scenario, rng, 1)
+    assert agent.satisfaction == pytest.approx(0.55)
+
+
+def test_no_shock_satisfaction_stays_roughly_flat_over_a_year(profiles):
+    """The headline realism check: a run with NO Jev decisions at all (no events, no shocks --
+    only population.generator's calibrated initial satisfaction and market.py's daily drift)
+    must not drift district-average satisfaction by more than 0.05 over 365 ticks. Before the
+    fix (uncalibrated initial satisfaction + a steeper, uncalibrated daily-drift baseline) the
+    real run in runs/base-or/ climbed by ~0.29 (0.585 -> 0.874) over the same span."""
+    rng = np.random.default_rng(2024)
+    agents = generate_population(profiles, 300, rng)
+    world = init_world(profiles, agents)
+    agents_dict = {a.id: a for a in agents}
+    # Isolate the satisfaction-drift mechanism: no migration/shop-driven layoffs muddying the
+    # signal (those are separate mechanisms, not part of this fix).
+    scenario = make_scenario(migration=MigrationParams(arrivals_per_month_per_1000=0.0))
+
+    start_by_district: dict[str, list[float]] = defaultdict(list)
+    for a in agents:
+        start_by_district[a.home].append(a.satisfaction)
+    start_means = {d: st.mean(v) for d, v in start_by_district.items()}
+
+    for tick in range(1, 366):
+        apply_policies(world, scenario, tick)
+        daily_update(world, agents_dict, scenario, tick, rng)
+
+    end_by_district: dict[str, list[float]] = defaultdict(list)
+    for a in agents_dict.values():
+        if a.active:
+            end_by_district[a.home].append(a.satisfaction)
+
+    for d, start_mean in start_means.items():
+        end_mean = st.mean(end_by_district[d])
+        assert abs(end_mean - start_mean) < 0.05, (
+            f"{d}: satisfaction drifted {start_mean:.3f} -> {end_mean:.3f} over 365 ticks"
+        )
+
+
+# --- commute habit (Agent.commute_since_tick) --------------------------------------------
+
+
+def test_commute_decision_change_sets_since_tick(profiles):
+    from jevcity.world import transport
+
+    agent = make_agent(0, profiles[0].id, employed=True)
+    agent.commute_mode = CommuteMode.CAR
+    agent.has_car = True
+    agent.commute_since_tick = -900  # long-standing habit
+
+    transport.apply_commute_decision(agent, CommuteMode.METRO, tick=100)
+    assert agent.commute_mode == CommuteMode.METRO
+    assert agent.commute_since_tick == 100
+
+
+def test_commute_decision_same_mode_keeps_since_tick(profiles):
+    from jevcity.world import transport
+
+    agent = make_agent(0, profiles[0].id, employed=True)
+    agent.commute_mode = CommuteMode.METRO
+    agent.commute_since_tick = -900
+
+    transport.apply_commute_decision(agent, CommuteMode.METRO, tick=100)
+    assert agent.commute_mode == CommuteMode.METRO
+    assert agent.commute_since_tick == -900  # unchanged: no actual switch
+
+
+def test_switch_mode_on_move_sets_since_tick(profiles):
+    from jevcity.world import transport
+
+    agent = make_agent(0, profiles[0].id, employed=True, job_district=profiles[1].id)
+    agent.commute_mode = CommuteMode.WALK
+    agent.commute_since_tick = -500
+    agent.home = profiles[0].id  # job_district != home -> WALK is unrealistic, forces METRO
+
+    transport.switch_mode_on_move(agent, tick=42)
+    assert agent.commute_mode == CommuteMode.METRO
+    assert agent.commute_since_tick == 42
+
+
+def test_apply_decisions_updates_commute_since_tick_on_switch(profiles):
+    agent = make_agent(0, profiles[0].id, employed=True)
+    agent.commute_mode = CommuteMode.BUS
+    agent.has_car = True
+    agent.commute_since_tick = -1000
+    world = init_world(profiles, [agent])
+    agents_dict = {0: agent}
+    scenario = make_scenario()
+    rng = np.random.default_rng(1)
+    decision = AgentDecision(
+        agent_id=0, tick=50, action=Action.STAY, destination=None,
+        spending=0.5, satisfaction=0.6, confidence=0.9, commute_mode=CommuteMode.CAR,
+    )
+    apply_decisions(world, agents_dict, [decision], scenario, rng, 50)
+    assert agent.commute_mode == CommuteMode.CAR
+    assert agent.commute_since_tick == 50

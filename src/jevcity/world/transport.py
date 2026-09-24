@@ -64,22 +64,28 @@ def commute_cost_monthly(
     return 0.0  # BIKE, WALK
 
 
-def apply_commute_decision(agent: Agent, commute_mode: CommuteMode | None) -> None:
+def apply_commute_decision(agent: Agent, commute_mode: CommuteMode | None, tick: int) -> None:
     """Apply a (possibly None = keep current) commute_mode decision, ignoring CAR for
-    agents without a car."""
+    agents without a car. `commute_since_tick` resets to `tick` only when the mode actually
+    changes (or is set for the first time), so a decision that just reaffirms the current
+    mode doesn't reset the habit clock -- see Agent.commute_since_tick."""
     if commute_mode is None or not agent.employed:
         return
     if commute_mode is CommuteMode.CAR and not agent.has_car:
         return
-    agent.commute_mode = commute_mode
+    if commute_mode != agent.commute_mode:
+        agent.commute_mode = commute_mode
+        agent.commute_since_tick = tick
 
 
-def switch_mode_on_move(agent: Agent) -> None:
+def switch_mode_on_move(agent: Agent, tick: int) -> None:
     """A WALK commuter whose job is no longer in their (new) home district switches to
-    METRO -- walking to a different district isn't realistic."""
+    METRO -- walking to a different district isn't realistic. Counts as a mode change: resets
+    commute_since_tick (see Agent.commute_since_tick)."""
     if (
         agent.commute_mode is CommuteMode.WALK
         and agent.job_district is not None
         and agent.job_district != agent.home
     ):
         agent.commute_mode = CommuteMode.METRO
+        agent.commute_since_tick = tick
