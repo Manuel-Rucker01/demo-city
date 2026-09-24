@@ -1,0 +1,9 @@
+extends: base.yaml
+name: rent_cap_sant_andreu
+description: Rent cap in Sant Andreu from day 30 (new-lease rent capped at its initial level, renewals frozen). Chosen because Sant Andreu's rent rose ~10% in the base run, so the cap actually binds.
+policies:
+  - type: rent_cap
+    district: sant_andreu
+    start_tick: 30
+    cap_pct_of_initial: 1.0
+    max_increase_pct: 0.0

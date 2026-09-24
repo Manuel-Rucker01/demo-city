@@ -185,6 +185,8 @@ class Agent:
     commute_mode: CommuteMode | None = None  # None if not commuting (unemployed, retired)
     shopping_place: ShoppingPlace = ShoppingPlace.LOCAL
     active: bool = True  # False once the household has left Barcelona
+    commute_since_tick: int | None = None  # when the current commute mode started (habit);
+    #                                        negative = before the simulation started
     arrived_tick: int | None = None  # set for households that moved into the city mid-run
 
     @property
@@ -501,6 +503,8 @@ class EventParams(BaseModel):
     lease_length_ticks: int = 360
     tourism_pressure_daily_prob: float = 0.002  # scaled by district tourist share
     school_year_tick: int = 244  # ~1 September
+    transit_awareness_days: int = 60  # affected commuters notice a new line/LEZ spread over
+    #                                   this many days after it starts (not all on day one)
 
 
 class MigrationParams(BaseModel):
