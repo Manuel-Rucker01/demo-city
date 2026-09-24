@@ -5,7 +5,7 @@ from pathlib import Path
 
 from pydantic import ValidationError
 
-from jevcity.types import AGE_BUCKETS, DistrictProfile
+from jevcity.types import AGE_BUCKETS, CommuteMode, DistrictProfile
 
 _SUM_TOLERANCE = 1e-3
 
@@ -28,7 +28,13 @@ _OPTIONAL_NUMERIC_FIELDS: dict[str, tuple[float, float]] = {
     "income_per_household_annual": (5_000.0, 250_000.0),
     "owner_share": (0.0, 1.0),
     "avg_household_size": (1.0, 6.0),
+    "area_km2": (0.01, 50.0),
+    "tourist_flats": (0.0, 20_000.0),
+    "car_ownership": (0.0, 1.0),
+    "households_with_children_share": (0.0, 1.0),
 }
+
+_VALID_COMMUTE_MODES = {m.value for m in CommuteMode}
 
 
 def load_profiles(path: str | Path) -> list[DistrictProfile]:
@@ -107,6 +113,31 @@ def load_profiles(path: str | Path) -> list[DistrictProfile]:
                 raise ValueError(
                     f"district {p.id!r} in {path}: {field}={value!r} outside sane range "
                     f"[{lo}, {hi}]"
+                )
+
+        if p.commute_mode_share is not None:
+            if "commute_mode_share" not in p.sources:
+                raise ValueError(
+                    f"district {p.id!r} in {path}: commute_mode_share is set but has no "
+                    "sources entry; optional realism fields must carry a Source when not None"
+                )
+            unknown_modes = set(p.commute_mode_share) - _VALID_COMMUTE_MODES
+            if unknown_modes:
+                raise ValueError(
+                    f"district {p.id!r} in {path}: commute_mode_share has unknown mode(s) "
+                    f"{sorted(unknown_modes)} (expected a subset of {sorted(_VALID_COMMUTE_MODES)})"
+                )
+            for mode, share in p.commute_mode_share.items():
+                if not (0.0 <= share <= 1.0):
+                    raise ValueError(
+                        f"district {p.id!r} in {path}: commute_mode_share[{mode!r}]={share!r} "
+                        "outside sane range [0.0, 1.0]"
+                    )
+            mode_total = sum(p.commute_mode_share.values())
+            if abs(mode_total - 1.0) > _SUM_TOLERANCE:
+                raise ValueError(
+                    f"district {p.id!r} in {path}: commute_mode_share sums to {mode_total!r}, "
+                    f"expected ~1.0 (tolerance {_SUM_TOLERANCE})"
                 )
 
     return profiles

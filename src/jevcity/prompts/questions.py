@@ -3,8 +3,10 @@
 The `action` / `spending` / `satisfaction` question text and criteria are identical
 for every agent at K=1 (see docs/jev-reference/primitives.md: "criteria aligned with
 instructions", and model-jaggedness "literal reading" -> spell out each option).
-That makes them cacheable by the real backend. Only `destination`'s criteria depend
-on the world's districts, which are fixed for a whole run.
+That makes them cacheable by the real backend. `destination`'s criteria depend on the
+agent's own relevant-districts shortlist (see state_builder._select_relevant_districts),
+and `commute_mode`/`shopping_place` are only built (and only asked) when relevant --
+see state_builder.wants_commute_question / wants_shopping_question.
 """
 
 from __future__ import annotations
@@ -18,11 +20,15 @@ from jevcity.prompts.buckets import (
     savings_months,
 )
 from jevcity.types import (
+    LEAVE_CITY,
     Action,
     Agent,
+    CommuteMode,
+    DistrictId,
     Event,
     EventKind,
     Occupation,
+    ShoppingPlace,
     Tenure,
     World,
 )
@@ -34,22 +40,16 @@ ACTION_INSTRUCTIONS = (
 )
 
 ACTION_CRITERIA: dict[str, str] = {
-    Action.STAY: "Continue with the current home and job unchanged today; nothing here forces a change.",
-    Action.MOVE: (
-        "Start moving to a different home now, because the current one is unaffordable, "
-        "unsuitable, or a clearly better option exists."
-    ),
-    Action.JOB_SEARCH: (
-        "Actively look for a new job today, because this person is unemployed, at risk of "
-        "losing their job, or a clearly better job opportunity has appeared."
-    ),
-    Action.SPEND: "Spend freely on discretionary (non-essential) purchases today.",
-    Action.SAVE: "Prioritize saving money today, cutting back on discretionary spending.",
+    Action.STAY: "Keep the current home and job unchanged today.",
+    Action.MOVE: "Start moving home now: current one is unaffordable, unsuitable, or a clearly better option exists.",
+    Action.JOB_SEARCH: "Look for a new job: unemployed, at risk of job loss, or a clearly better offer appeared.",
+    Action.SPEND: "Spend freely on non-essential purchases today.",
+    Action.SAVE: "Cut discretionary spending and prioritize saving today.",
 }
 
 DESTINATION_INSTRUCTIONS = (
-    "If this person moved now, which district would they most likely choose? Respect what "
-    "`districts` shows about affordability, rent trend, jobs and commute for each option."
+    "If this person moved now, which district (or leaving Barcelona) would they most likely "
+    "choose? Respect what `districts` shows about affordability, rent trend, jobs and commute."
 )
 
 SPENDING_INSTRUCTIONS = (
@@ -79,12 +79,23 @@ SATISFACTION_CRITERIA: list[str] = [
 SPENDING_LEVELS = len(SPENDING_CRITERIA)
 SATISFACTION_LEVELS = len(SATISFACTION_CRITERIA)
 
+COMMUTE_MODE_INSTRUCTIONS = "How will this person most likely commute to work now?"
 
-def destination_criteria(world: World) -> dict[str, str]:
-    """Option -> display name, identical for every agent within a run (K=1 and K>1)."""
-    return {
-        did: f"{profile.name} district" for did, profile in sorted(world.profiles.items())
-    }
+SHOPPING_PLACE_INSTRUCTIONS = "Where will this person most likely do their shopping this month?"
+
+SHOPPING_PLACE_CRITERIA: dict[str, str | None] = {
+    ShoppingPlace.LOCAL: "shops in their own home district",
+    ShoppingPlace.WORK_DISTRICT: "shops near their job",
+    ShoppingPlace.CENTRE: "Ciutat Vella / Eixample shopping streets",
+    ShoppingPlace.ONLINE: None,
+}
+
+
+def destination_criteria(district_ids: list[DistrictId], world: World) -> dict[str, str]:
+    """Option -> 2-4 word hint; state's `districts` already describes each one in full."""
+    criteria = {did: f"{world.profiles[did].name} district" for did in district_ids}
+    criteria[LEAVE_CITY] = "Leave Barcelona altogether"
+    return criteria
 
 
 def action_question(*, person_ref: str | None = None) -> dict:
@@ -97,18 +108,20 @@ def action_question(*, person_ref: str | None = None) -> dict:
     return {"type": "choice", "instructions": instructions, "criteria": dict(ACTION_CRITERIA)}
 
 
-def destination_question(world: World, *, person_ref: str | None = None) -> dict:
+def destination_question(
+    district_ids: list[DistrictId], world: World, *, person_ref: str | None = None
+) -> dict:
     instructions = DESTINATION_INSTRUCTIONS
     if person_ref is not None:
         instructions = (
-            f"If `{person_ref}` moved now, which district would they most likely choose? "
-            f"Respect what `districts` and `{person_ref}.affordability` show about "
-            "affordability, rent trend, jobs and commute for each option."
+            f"If `{person_ref}` moved now, which district (or leaving Barcelona) would they "
+            f"most likely choose? Respect what `districts` and `{person_ref}.affordability` "
+            "show about affordability, rent trend, jobs and commute for each option."
         )
     return {
         "type": "choice",
         "instructions": instructions,
-        "criteria": destination_criteria(world),
+        "criteria": destination_criteria(district_ids, world),
     }
 
 
@@ -133,15 +146,40 @@ def satisfaction_question(*, person_ref: str | None = None) -> dict:
     }
 
 
+def commute_mode_question(*, has_car: bool, person_ref: str | None = None) -> dict:
+    instructions = COMMUTE_MODE_INSTRUCTIONS
+    if person_ref is not None:
+        instructions = f"How will `{person_ref}` most likely commute to work now?"
+    criteria = {m.value: None for m in CommuteMode if has_car or m is not CommuteMode.CAR}
+    return {"type": "choice", "instructions": instructions, "criteria": criteria}
+
+
+def shopping_place_question(*, person_ref: str | None = None) -> dict:
+    instructions = SHOPPING_PLACE_INSTRUCTIONS
+    if person_ref is not None:
+        instructions = f"Where will `{person_ref}` most likely do their shopping this month?"
+    return {
+        "type": "choice",
+        "instructions": instructions,
+        "criteria": dict(SHOPPING_PLACE_CRITERIA),
+    }
+
+
 # --- mock priors --------------------------------------------------------------------------
 
 
 def mock_priors_for_agent(
-    agent: Agent, events: Iterable[Event], world: World
+    agent: Agent,
+    events: Iterable[Event],
+    world: World,
+    *,
+    districts: list[DistrictId] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Hand-written heuristics telling the MOCK backend how to weight random answers.
 
     Never sent to the real API. Kept as one readable function per question name.
+    `districts` restricts the `destination` weights to this agent's relevant shortlist
+    (+ leave_city); defaults to every district in the world when omitted (unit tests).
     """
     events = list(events)
     burden = agent.rent_burden
@@ -191,7 +229,8 @@ def mock_priors_for_agent(
         action_w[Action.MOVE] *= OWNER_MOVE_PRIOR_FACTOR
 
     # --- destination ---
-    dest_w = _destination_weights(agent, world)
+    dest_districts = list(world.profiles) if districts is None else districts
+    dest_w = _destination_weights(agent, world, dest_districts, label)
 
     # --- spending: shift weight toward extremes by burden and savings ---
     spending_target = 2  # neutral index of 5 levels (0..4)
@@ -210,13 +249,17 @@ def mock_priors_for_agent(
         "destination": dest_w,
         "spending": {str(i): w for i, w in enumerate(spending_w)},
         "satisfaction": {str(i): w for i, w in enumerate(sat_w)},
+        "commute_mode": _commute_mode_weights(agent),
+        "shopping_place": _shopping_place_weights(),
     }
 
 
-def _destination_weights(agent: Agent, world: World) -> dict[str, float]:
+def _destination_weights(
+    agent: Agent, world: World, districts: list[DistrictId], burden_lbl: str
+) -> dict[str, float]:
     weights: dict[str, float] = {}
     income = agent.income_monthly
-    for did in world.profiles:
+    for did in districts:
         state = world.states[did]
         pct = state.avg_rent / income if income > 0 else 9.99
         afford_factor = max(0.05, 1.0 - min(pct, 2.0) / 2.0)
@@ -226,7 +269,27 @@ def _destination_weights(agent: Agent, world: World) -> dict[str, float]:
         if did == agent.home:
             w *= 1.2
         weights[did] = w
+    leave_w = {"ok": 0.05, "stretched": 0.08, "high": 0.2, "severe": 0.4}[burden_lbl]
+    weights[LEAVE_CITY] = leave_w
     return weights
+
+
+def _commute_mode_weights(agent: Agent) -> dict[str, float]:
+    modes = [m for m in CommuteMode if agent.has_car or m is not CommuteMode.CAR]
+    weights = {m.value: 1.0 for m in modes}
+    weights[CommuteMode.METRO.value] = 3.0
+    if agent.has_car:
+        weights[CommuteMode.CAR.value] = 2.0
+    return weights
+
+
+def _shopping_place_weights() -> dict[str, float]:
+    return {
+        ShoppingPlace.LOCAL.value: 3.0,
+        ShoppingPlace.WORK_DISTRICT.value: 1.0,
+        ShoppingPlace.CENTRE.value: 1.0,
+        ShoppingPlace.ONLINE.value: 1.0,
+    }
 
 
 def _triangular_weights(n: int, target: int) -> list[float]:

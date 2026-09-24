@@ -11,10 +11,12 @@ from jevcity.types import (
     QUESTION_NAMES,
     Action,
     Agent,
+    CommuteMode,
     DistrictState,
     Event,
     EventKind,
     Occupation,
+    ShoppingPlace,
     Tenure,
     World,
     question_key,
@@ -62,6 +64,10 @@ def make_agent(
     satisfaction: float = 0.5,
     spending_level: float = 0.5,
     tenure: Tenure = Tenure.RENTER,
+    children: int = 0,
+    has_car: bool = False,
+    commute_mode: CommuteMode | None = None,
+    shopping_place: ShoppingPlace = ShoppingPlace.LOCAL,
 ) -> Agent:
     return Agent(
         id=agent_id,
@@ -79,6 +85,10 @@ def make_agent(
         satisfaction=satisfaction,
         days_unemployed=days_unemployed,
         tenure=tenure,
+        children=children,
+        has_car=has_car,
+        commute_mode=commute_mode,
+        shopping_place=shopping_place,
     )
 
 
@@ -126,10 +136,14 @@ class TestBuildRequestsK1:
         req = reqs[0]
         assert req.request_id == "t100-r0"
         assert req.agent_ids == [1]
-        for name in QUESTION_NAMES:
+        # PAYDAY alone doesn't trigger the conditional questions (see
+        # state_builder.wants_commute_question/wants_shopping_question).
+        for name in ("action", "destination", "spending", "satisfaction"):
             key = question_key(1, name)
             assert key in req.questions
             _assert_valid_question(req.questions[key])
+        assert question_key(1, "commute_mode") not in req.questions
+        assert question_key(1, "shopping_place") not in req.questions
 
     def test_state_shape_k1(self, profiles):
         world = make_world(profiles)
@@ -230,7 +244,7 @@ class TestBuildRequestsKN:
             person = req.state["people"][f"p{aid}"]
             assert set(person.keys()) == {"person", "today", "affordability"}
             assert set(person["affordability"].keys()) == set(world.profiles.keys())
-            for name in QUESTION_NAMES:
+            for name in ("action", "destination", "spending", "satisfaction"):
                 key = question_key(aid, name)
                 assert key in req.questions
                 _assert_valid_question(req.questions[key])
@@ -284,8 +298,13 @@ class TestMockPriors:
         priors = mock_priors_for_agent(agent, [], world)
         assert set(priors.keys()) == set(QUESTION_NAMES)
         assert set(priors["action"].keys()) == {a.value for a in Action}
-        assert set(priors["destination"].keys()) == set(world.profiles.keys())
+        assert set(priors["destination"].keys()) == set(world.profiles.keys()) | {"leave_city"}
         assert set(priors["spending"].keys()) == {"0", "1", "2", "3", "4"}
         assert set(priors["satisfaction"].keys()) == {"0", "1", "2", "3", "4"}
+        # agent has no car (make_agent default) -> "car" excluded from commute_mode options
+        assert set(priors["commute_mode"].keys()) == {
+            m.value for m in CommuteMode if m is not CommuteMode.CAR
+        }
+        assert set(priors["shopping_place"].keys()) == {p.value for p in ShoppingPlace}
         for name in QUESTION_NAMES:
             assert all(w >= 0 for w in priors[name].values())

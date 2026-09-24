@@ -5,6 +5,8 @@ import { MapView, type ColorMode, type FillMetric } from "./map/MapView";
 import { frameAt } from "./data/reconstruct";
 import { LineChartPanel } from "./charts/LineChartPanel";
 import { SankeyPanel } from "./charts/SankeyPanel";
+import { StackedAreaPanel } from "./charts/StackedAreaPanel";
+import { BarPanel } from "./charts/BarPanel";
 import { KpiTiles } from "./charts/KpiTiles";
 import { registerChartTheme } from "./charts/theme";
 import { aggregateMoves } from "./data/sankey";
@@ -31,11 +33,14 @@ app.innerHTML = `
         <button data-mode="district" class="active">District</button>
         <button data-mode="employed">Employment</button>
         <button data-mode="satisfaction">Satisfaction</button>
+        <button data-mode="commute">Commute</button>
       </div>
       <select id="fill-metric">
         <option value="avg_rent">Fill: avg rent</option>
         <option value="unemployment_rate">Fill: unemployment</option>
         <option value="avg_satisfaction">Fill: satisfaction</option>
+        <option value="tourist_units">Fill: tourist units</option>
+        <option value="shops_open">Fill: shops open</option>
       </select>
     </div>
   </header>
@@ -45,8 +50,25 @@ app.innerHTML = `
       <div class="loading-overlay" id="loading">Loading run…</div>
       <div id="kpi-tiles"></div>
       <div class="legend-row" id="legend-row"></div>
-      <div class="chart-slot" id="rent-chart"></div>
-      <div class="chart-slot" id="unemployment-chart"></div>
+      <div class="chart-tabs" id="chart-tabs">
+        <button data-tab="housing" class="active">Housing</button>
+        <button data-tab="tourism">Tourism &amp; commerce</button>
+        <button data-tab="mobility">Mobility &amp; migration</button>
+      </div>
+      <div class="tab-panel" data-tab-panel="housing">
+        <div class="chart-slot" id="rent-chart"></div>
+        <div class="chart-slot" id="unemployment-chart"></div>
+      </div>
+      <div class="tab-panel" data-tab-panel="tourism" style="display:none">
+        <div class="chart-grid-2">
+          <div class="chart-slot compact" id="tourist-chart"></div>
+          <div class="chart-slot compact" id="shops-chart"></div>
+        </div>
+      </div>
+      <div class="tab-panel" data-tab-panel="mobility" style="display:none">
+        <div class="chart-slot" id="mode-share-chart"></div>
+        <div class="chart-slot" id="migration-chart"></div>
+      </div>
       <div class="chart-slot sankey" id="sankey-chart"></div>
     </div>
   </div>
@@ -71,6 +93,7 @@ const colorModeGroup = document.getElementById("color-mode-group") as HTMLDivEle
 const fillMetricSelect = document.getElementById("fill-metric") as HTMLSelectElement;
 const loadingEl = document.getElementById("loading") as HTMLDivElement;
 const legendRow = document.getElementById("legend-row") as HTMLDivElement;
+const chartTabs = document.getElementById("chart-tabs") as HTMLDivElement;
 const playBtn = document.getElementById("play-btn") as HTMLButtonElement;
 const speedGroup = document.getElementById("speed-group") as HTMLDivElement;
 const scrub = document.getElementById("scrub") as HTMLInputElement;
@@ -79,6 +102,32 @@ const tickLabel = document.getElementById("tick-label") as HTMLDivElement;
 legendRow.innerHTML = DISTRICT_IDS.map(
   (d) => `<span class="legend-item"><span class="legend-dot" style="background:${DISTRICT_COLORS[d]}"></span>${districtDisplayName(d)}</span>`,
 ).join("");
+
+// ---- chart tabs: keeps the side panel readable at 1920x1080 with 6 time-series charts ----
+const tabPanels = new Map<string, HTMLElement>(
+  [...document.querySelectorAll<HTMLElement>("[data-tab-panel]")].map((el) => [el.dataset.tabPanel!, el]),
+);
+function activateTab(tab: string): void {
+  for (const [name, el] of tabPanels) el.style.display = name === tab ? "" : "none";
+  [...chartTabs.children].forEach((c) => c.classList.toggle("active", (c as HTMLElement).dataset.tab === tab));
+  // Charts inside a tab that was hidden at construction time were sized 0x0 by ECharts; resize
+  // them now that the container has real dimensions.
+  if (tab === "housing") {
+    rentChart.resize();
+    unemploymentChart.resize();
+  } else if (tab === "tourism") {
+    touristChart.resize();
+    shopsChart.resize();
+  } else if (tab === "mobility") {
+    modeShareChart.resize();
+    migrationChart.resize();
+  }
+}
+chartTabs.addEventListener("click", (e) => {
+  const btn = (e.target as HTMLElement).closest("button");
+  if (!btn?.dataset.tab) return;
+  activateTab(btn.dataset.tab);
+});
 
 const kpiTiles = new KpiTiles(document.getElementById("kpi-tiles") as HTMLDivElement);
 const tooltipsEnabled = !record.enabled;
@@ -94,6 +143,20 @@ const unemploymentChart = new LineChartPanel(
   (v) => `${(v * 100).toFixed(0)}%`,
   { tooltipsEnabled },
 );
+const touristChart = new LineChartPanel(
+  document.getElementById("tourist-chart") as HTMLDivElement,
+  "Tourist units / district",
+  (v) => `${Math.round(v)}`,
+  { tooltipsEnabled },
+);
+const shopsChart = new LineChartPanel(
+  document.getElementById("shops-chart") as HTMLDivElement,
+  "Shops open / district",
+  (v) => `${Math.round(v)}`,
+  { tooltipsEnabled },
+);
+const modeShareChart = new StackedAreaPanel(document.getElementById("mode-share-chart") as HTMLDivElement, { tooltipsEnabled });
+const migrationChart = new BarPanel(document.getElementById("migration-chart") as HTMLDivElement, { tooltipsEnabled });
 const sankeyChart = new SankeyPanel(document.getElementById("sankey-chart") as HTMLDivElement);
 
 interface RunSlot {
@@ -125,7 +188,10 @@ async function buildMapSlot(runId: string, label: "base" | "scenario"): Promise<
   const loaded = await loadRun(runId, (loadedTicks, total) => {
     loadingEl.textContent = `Loading ${label} run… ${loadedTicks}/${total} ticks`;
   });
-  const mapView = new MapView({ container: slotEl, geo, agents: loaded.agents, pitch: record.enabled ? 20 : 0 });
+  // MapView is built with the FULL agent roster (initial population + every arrival across the
+  // run, in the same dense column order reconstructRun uses) since the whole run is already
+  // loaded by this point — arrivals aren't a "future unknown", just initially-inactive columns.
+  const mapView = new MapView({ container: slotEl, geo, agents: loaded.combinedAgents, pitch: record.enabled ? 20 : 0 });
   mapView.setColorMode(colorMode);
   mapView.setFillMetric(fillMetric);
   return { runId, label, loaded, mapView, slotEl };
@@ -174,22 +240,43 @@ async function setup(baseRunId: string, compareRunId: string | null): Promise<vo
 }
 
 function renderCharts(): void {
+  const primary = slots[0];
+  const policies = primary?.loaded.meta.scenario.policies ?? [];
+
   const rentSpecs = slots.map((s) => ({
     runLabel: s.label,
     ticks: s.loaded.ticks,
     metric: (d: { avg_rent: number }) => d.avg_rent,
-    highlightDistrict: s.loaded.meta.scenario.policies[0]?.district ?? null,
-    policyStartTick: s.loaded.meta.scenario.policies[0]?.start_tick ?? null,
+    highlightDistrict: s.loaded.meta.scenario.policies.find((p) => p.type === "rent_cap")?.district ?? null,
   }));
-  rentChart.setData(rentSpecs);
+  rentChart.setData(rentSpecs, policies);
+
   const unemploymentSpecs = slots.map((s) => ({
     runLabel: s.label,
     ticks: s.loaded.ticks,
     metric: (d: { unemployment_rate: number }) => d.unemployment_rate,
-    highlightDistrict: s.loaded.meta.scenario.policies[0]?.district ?? null,
-    policyStartTick: s.loaded.meta.scenario.policies[0]?.start_tick ?? null,
+    highlightDistrict: s.loaded.meta.scenario.policies.find((p) => p.type === "rent_cap")?.district ?? null,
   }));
-  unemploymentChart.setData(unemploymentSpecs);
+  unemploymentChart.setData(unemploymentSpecs, policies);
+
+  const touristSpecs = slots.map((s) => ({
+    runLabel: s.label,
+    ticks: s.loaded.ticks,
+    metric: (d: { tourist_units?: number }) => d.tourist_units ?? 0,
+  }));
+  touristChart.setData(touristSpecs, policies);
+
+  const shopsSpecs = slots.map((s) => ({
+    runLabel: s.label,
+    ticks: s.loaded.ticks,
+    metric: (d: { shops_open?: number }) => d.shops_open ?? 0,
+  }));
+  shopsChart.setData(shopsSpecs, policies);
+
+  if (primary) {
+    modeShareChart.setData(primary.loaded.ticks, policies);
+    migrationChart.setData(primary.loaded.ticks);
+  }
 }
 
 function onPlaybackChange(state: { tickIndex: number; playing: boolean; speed: number }): void {
@@ -202,12 +289,18 @@ function onPlaybackChange(state: { tickIndex: number; playing: boolean; speed: n
   const stepSize = state.tickIndex - lastTickIndex;
   for (const s of slots) {
     const frame = frameAt(s.loaded.state, state.tickIndex);
-    s.mapView.setAgentState(frame.home, frame.employed, frame.satisfaction);
+    s.mapView.setAgentState(frame.home, frame.employed, frame.satisfaction, frame.active);
     if (stepSize === 1 && state.tickIndex >= 1) {
       const rec = s.loaded.ticks[state.tickIndex - 1];
       if (rec) {
         for (const mv of rec.moves) {
           if (mv.src !== mv.dst) s.mapView.animateMove(mv.agent_id, mv.dst);
+        }
+        for (const a of rec.arrivals ?? []) {
+          s.mapView.animateArrival(a.id, a.home);
+        }
+        for (const id of rec.departures ?? []) {
+          s.mapView.animateDeparture(id);
         }
       }
     }
@@ -225,8 +318,12 @@ function onPlaybackChange(state: { tickIndex: number; playing: boolean; speed: n
       tickIndex: state.tickIndex,
       totalTicks: primary.loaded.state.nTicks,
     });
-    rentChart.setCursor(Math.max(0, state.tickIndex - 1));
-    unemploymentChart.setCursor(Math.max(0, state.tickIndex - 1));
+    const cursor = Math.max(0, state.tickIndex - 1);
+    rentChart.setCursor(cursor);
+    unemploymentChart.setCursor(cursor);
+    touristChart.setCursor(cursor);
+    shopsChart.setCursor(cursor);
+    modeShareChart.setCursor(cursor);
     sankeyChart.setLinks(aggregateMoves(primary.loaded.ticks, state.tickIndex - 1));
   }
 }
@@ -274,6 +371,10 @@ scrub.addEventListener("input", () => playback?.seek(Number(scrub.value)));
 window.addEventListener("resize", () => {
   rentChart.resize();
   unemploymentChart.resize();
+  touristChart.resize();
+  shopsChart.resize();
+  modeShareChart.resize();
+  migrationChart.resize();
   sankeyChart.resize();
 });
 

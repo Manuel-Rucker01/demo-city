@@ -14,6 +14,8 @@ const TILE_DEFS: { key: string; label: string }[] = [
   { key: "day", label: "Day" },
   { key: "population", label: "Population" },
   { key: "moves", label: "Moves today" },
+  { key: "migration", label: "Arrivals / departures" },
+  { key: "shops", label: "Shops open" },
   { key: "calls", label: "Jev calls" },
   { key: "tokens", label: "Tokens" },
   { key: "cost", label: "Cost" },
@@ -50,6 +52,8 @@ export class KpiTiles {
     if (!tick) {
       set("population", "—");
       set("moves", "—");
+      set("migration", "—");
+      set("shops", "—");
       set("calls", "—");
       set("tokens", "—");
       set("cost", "—");
@@ -61,6 +65,11 @@ export class KpiTiles {
     const totalPop = tick.districts.reduce((s, d) => s + d.residents, 0);
     set("population", formatInt(totalPop));
     set("moves", formatInt(tick.moves.length));
+    const arrivals = tick.arrivals?.length ?? tick.districts.reduce((s, d) => s + (d.arrivals ?? 0), 0);
+    const departures = tick.departures?.length ?? tick.districts.reduce((s, d) => s + (d.departures ?? 0), 0);
+    set("migration", `+${formatInt(arrivals)} / -${formatInt(departures)}`);
+    const hasShopsData = tick.districts.some((d) => d.shops_open !== undefined);
+    set("shops", hasShopsData ? formatInt(tick.districts.reduce((s, d) => s + (d.shops_open ?? 0), 0)) : "—");
     set("calls", formatInt(tick.usage_total.requests));
     set("tokens", formatTokensCompact(tick.usage_total.input_tokens + tick.usage_total.output_tokens));
     set("cost", formatUsdCost(tick.usage_total.cost_usd, tick.usage_total.estimated));

@@ -195,6 +195,24 @@ def _fmt(value, width, prec=None) -> str:
     return f"{value!s:>{width}}"
 
 
+def _fmt_mode_share(mode_share: dict[str, float]) -> str:
+    """Compact 'mode:pct% ...' string, largest share first; '-' when nobody commutes."""
+    if not mode_share:
+        return "-"
+    parts = sorted(mode_share.items(), key=lambda kv: -kv[1])
+    return " ".join(f"{mode}:{pct * 100:.0f}%" for mode, pct in parts)
+
+
+def _migration_totals(reader: runlog_reader.RunReader) -> tuple[int, int]:
+    """Sum of TickRecord.arrivals/.departures over every tick of the run."""
+    arrivals = 0
+    departures = 0
+    for t in reader.ticks():
+        arrivals += len(t.arrivals)
+        departures += len(t.departures)
+    return arrivals, departures
+
+
 def _cmd_compare(args: argparse.Namespace) -> int:
     reader_a = runlog_reader.RunReader(args.run_a)
     reader_b = runlog_reader.RunReader(args.run_b)
@@ -221,9 +239,23 @@ def _cmd_compare(args: argparse.Namespace) -> int:
               f"{_fmt(db.unemployment_rate if db else 0.0, val_w, 3)}")
         print(f"{'  avg_satisfaction':<{label_w}}{_fmt(da.avg_satisfaction if da else 0.0, val_w, 3)}"
               f"{_fmt(db.avg_satisfaction if db else 0.0, val_w, 3)}")
+        print(f"{'  tourist_units':<{label_w}}{_fmt(da.tourist_units if da else 0, val_w)}"
+              f"{_fmt(db.tourist_units if db else 0, val_w)}")
+        print(f"{'  shops_open':<{label_w}}{_fmt(da.shops_open if da else 0, val_w)}"
+              f"{_fmt(db.shops_open if db else 0, val_w)}")
+        print(f"{'  online_share':<{label_w}}{_fmt(da.online_share if da else 0.0, val_w, 3)}"
+              f"{_fmt(db.online_share if db else 0.0, val_w, 3)}")
+        mode_a = _fmt_mode_share(da.mode_share if da else {})
+        mode_b = _fmt_mode_share(db.mode_share if db else {})
+        mode_w = max(val_w, len(mode_a) + 2, len(mode_b) + 2)
+        print(f"{'  mode_share':<{label_w}}{_fmt(mode_a, mode_w)}{_fmt(mode_b, mode_w)}")
 
     print()
     print(f"{'total_moves':<{label_w}}{_fmt(summary_a.total_moves, val_w)}{_fmt(summary_b.total_moves, val_w)}")
+    arrivals_a, departures_a = _migration_totals(reader_a)
+    arrivals_b, departures_b = _migration_totals(reader_b)
+    print(f"{'total_arrivals':<{label_w}}{_fmt(arrivals_a, val_w)}{_fmt(arrivals_b, val_w)}")
+    print(f"{'total_departures':<{label_w}}{_fmt(departures_a, val_w)}{_fmt(departures_b, val_w)}")
     print(f"{'cost_usd':<{label_w}}{_fmt(summary_a.usage.cost_usd, val_w, 4)}{_fmt(summary_b.usage.cost_usd, val_w, 4)}")
     print(f"{'cost_source':<{label_w}}{_fmt(summary_a.usage.cost_source, val_w)}{_fmt(summary_b.usage.cost_source, val_w)}")
     models_a = ",".join(sorted(summary_a.usage.models_seen)) or "-"

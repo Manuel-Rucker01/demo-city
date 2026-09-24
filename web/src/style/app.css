@@ -239,6 +239,36 @@ button.active {
   height: 260px;
 }
 
+/* ---- chart tabs: keeps the side panel readable at 1920x1080 with 6 time-series charts ---- */
+
+.chart-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.chart-tabs button {
+  flex: 1 1 0;
+  padding: 6px 8px;
+  font-size: 11.5px;
+  text-align: center;
+}
+
+.tab-panel {
+  flex: 0 0 auto;
+}
+
+.chart-grid-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.chart-slot.compact {
+  height: 220px;
+}
+
 /* ---- playback bar ---- */
 
 .playback-bar {

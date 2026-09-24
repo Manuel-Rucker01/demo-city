@@ -178,7 +178,10 @@ def test_housing_conservation_and_bounds(profiles):
         apply_decisions(world, agents_dict, decisions, scenario, rng, tick)
         daily_update(world, agents_dict, scenario, tick, rng)
 
-        assert sum(s.occupied_units for s in world.states.values()) == n_agents
+        # arrivals join agents_dict, departures become inactive: occupancy tracks active agents
+        n_active = sum(a.active for a in agents_dict.values())
+        assert n_active >= n_agents - 60  # sanity: population can't vanish
+        assert sum(s.occupied_units for s in world.states.values()) == n_active
         for state in world.states.values():
             assert state.occupied_units <= state.housing_units
             assert state.filled_jobs <= state.jobs

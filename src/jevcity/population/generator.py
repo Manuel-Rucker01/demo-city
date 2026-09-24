@@ -91,7 +91,16 @@ import math
 
 import numpy as np
 
-from jevcity.types import Agent, DistrictProfile, Occupation, Tenure
+from jevcity.types import (
+    Agent,
+    CommuteMode,
+    DistrictId,
+    DistrictProfile,
+    Occupation,
+    ShoppingPlace,
+    Tenure,
+    World,
+)
 
 _ADULT_BUCKETS = ("18-34", "35-49", "50-64", "65+")
 _BUCKET_AGE_RANGE = {
@@ -117,6 +126,33 @@ MORTGAGE_RENT_FRACTION = 0.55
 MORTGAGE_NOISE_SIGMA = 0.15
 OWNER_FEES_MIN = 150.0
 OWNER_FEES_MAX = 250.0
+
+# --- District-realism defaults (used when DistrictProfile leaves the field unset; see the
+# module docstring's "Optional realism fields" and docs/CONTRACTS.md) --------------------------
+DEFAULT_CAR_OWNERSHIP = 0.5  # share of households with >=1 car
+DEFAULT_CHILDREN_SHARE = 0.25  # share of households with minors
+DEFAULT_COMMUTE_MODE_SHARE = {
+    "metro": 0.35, "bus": 0.12, "car": 0.22, "bike": 0.04, "walk": 0.27,
+}
+_COMMUTE_MODES = ("metro", "bus", "car", "bike", "walk")  # CommuteMode values, fixed order
+CHILDREN_MIN_AGE = 25
+CHILDREN_MAX_AGE = 55
+CHILDREN_MIN = 1
+CHILDREN_MAX = 3
+WALK_HOME_JOB_BOOST = 3.0  # relative propensity to walk when job_district == home district
+
+# Shopping place plausible split (see module docstring): most spend locally; a minority goes
+# online (skewed younger / higher income), to their work district, or to the centre.
+SHOPPING_LOCAL_BASE = 0.75
+SHOPPING_ONLINE_BASE = 0.12
+SHOPPING_WORK_DISTRICT_BASE = 0.08
+SHOPPING_CENTRE_BASE = 0.05
+
+# --- Migration (spawn_arrivals) ----------------------------------------------------------
+ARRIVAL_MIN_AGE = 25
+ARRIVAL_MAX_AGE = 39
+ARRIVAL_OWNER_SHARE = 0.05  # arrivals are mostly renters
+ARRIVAL_EMPLOYED_PROB = 0.7
 
 
 def _largest_remainder(weights: np.ndarray, total: int) -> np.ndarray:
@@ -194,6 +230,66 @@ def _weighted_top_k(rng: np.random.Generator, propensity: np.ndarray, k: int) ->
     key = u ** (1.0 / safe_prop)
     order = np.argsort(-key, kind="stable")
     return order[:k]
+
+
+def _assign_commute_modes(
+    rng: np.random.Generator,
+    employed_idx: np.ndarray,
+    has_car: np.ndarray,
+    job_is_home: np.ndarray,
+    mode_share: dict[str, float] | None,
+) -> np.ndarray:
+    """Exact-quota commute mode per employed agent (indices into the district's agent array).
+
+    `has_car` / `job_is_home` are full-length boolean arrays indexed like `employed_idx`.
+    car is only ever assigned to agents with has_car=True; any car quota that can't be filled
+    (not enough car owners among the employed) is redistributed to metro/bus proportional to
+    their shares. walk is boosted (WALK_HOME_JOB_BOOST) for agents whose job_district == home.
+    Returns an array of CommuteMode values, one per entry of `employed_idx`.
+    """
+    n_emp = len(employed_idx)
+    out = np.empty(n_emp, dtype=object)
+    if n_emp == 0:
+        return out
+
+    share = mode_share or DEFAULT_COMMUTE_MODE_SHARE
+    weights = np.array([max(share.get(m, DEFAULT_COMMUTE_MODE_SHARE[m]), 0.0) for m in _COMMUTE_MODES])
+    quotas = dict(zip(_COMMUTE_MODES, _largest_remainder(weights, n_emp), strict=True))
+
+    local_idx = np.arange(n_emp)
+    car_capable = local_idx[has_car[employed_idx]]
+    car_quota = min(int(quotas["car"]), len(car_capable))
+    overflow = int(quotas["car"]) - car_quota
+    if overflow > 0:
+        mb_weights = np.array([weights[_COMMUTE_MODES.index("metro")], weights[_COMMUTE_MODES.index("bus")]])
+        add = _largest_remainder(mb_weights, overflow)
+        quotas["metro"] += int(add[0])
+        quotas["bus"] += int(add[1])
+    quotas["car"] = car_quota
+
+    car_sel = car_capable[rng.permutation(len(car_capable))[:car_quota]] if car_quota else np.array([], dtype=int)
+    out[car_sel] = CommuteMode.CAR
+
+    remaining = np.setdiff1d(local_idx, car_sel, assume_unique=False)
+    walk_quota = min(int(quotas["walk"]), len(remaining))
+    propensity = np.where(job_is_home[employed_idx][remaining], WALK_HOME_JOB_BOOST, 1.0)
+    walk_sel = remaining[_weighted_top_k(rng, propensity, walk_quota)]
+    out[walk_sel] = CommuteMode.WALK
+
+    remaining = np.setdiff1d(remaining, walk_sel, assume_unique=False)
+    bike_quota = min(int(quotas["bike"]), len(remaining))
+    perm = remaining[rng.permutation(len(remaining))]
+    bike_sel = perm[:bike_quota]
+    out[bike_sel] = CommuteMode.BIKE
+
+    remaining = perm[bike_quota:]
+    metro_quota = min(int(quotas["metro"]), len(remaining))
+    metro_sel = remaining[:metro_quota]
+    out[metro_sel] = CommuteMode.METRO
+    bus_sel = remaining[metro_quota:]
+    out[bus_sel] = CommuteMode.BUS
+
+    return out
 
 
 def _generate_district(
@@ -390,6 +486,62 @@ def _generate_district(
     mean_sat = np.clip(0.75 - 0.8 * rent_burden, 0.05, 0.95)
     satisfaction = rng.beta(mean_sat * conc, (1.0 - mean_sat) * conc)
 
+    # --- children: exact quota among household_size>=2 agents aged 25-55 -----------------
+    children = np.zeros(cnt, dtype=int)
+    children_share = (
+        profile.households_with_children_share
+        if profile.households_with_children_share is not None
+        else DEFAULT_CHILDREN_SHARE
+    )
+    eligible_children = all_idx[
+        (household_size >= 2) & (ages >= CHILDREN_MIN_AGE) & (ages <= CHILDREN_MAX_AGE)
+    ]
+    n_children_quota = min(_quota(children_share, cnt), len(eligible_children))
+    if n_children_quota:
+        chosen = eligible_children[rng.permutation(len(eligible_children))[:n_children_quota]]
+        children[chosen] = rng.integers(CHILDREN_MIN, CHILDREN_MAX + 1, size=n_children_quota)
+
+    # --- has_car: exact quota, weighted by income percentile and household size ----------
+    car_ownership = profile.car_ownership if profile.car_ownership is not None else DEFAULT_CAR_OWNERSHIP
+    n_cars = _quota(car_ownership, cnt)
+    car_propensity = (0.3 + percentile) * (0.5 + 0.5 * household_size / 4.0)
+    car_idx = _weighted_top_k(rng, car_propensity, n_cars)
+    has_car = np.zeros(cnt, dtype=bool)
+    has_car[car_idx] = True
+
+    # --- commute_mode: exact quota among employed agents, car gated on has_car -----------
+    job_district_arr = np.array(job_district_list, dtype=object)
+    job_is_home = job_district_arr == profile.id
+    employed_idx = all_idx[employed]
+    commute_share = profile.commute_mode_share
+    commute_modes_emp = _assign_commute_modes(rng, employed_idx, has_car, job_is_home, commute_share)
+    commute_mode = np.empty(cnt, dtype=object)
+    commute_mode[:] = None
+    commute_mode[employed_idx] = commute_modes_emp
+
+    # --- shopping_place: plausible split, skewed by age/income/employment (see docstring) --
+    age_norm = np.clip(ages / 60.0, 0.0, 1.0)
+    online_p = np.clip(
+        SHOPPING_ONLINE_BASE + 0.10 * (percentile - 0.5) + 0.10 * (0.5 - age_norm), 0.01, 0.5
+    )
+    has_job_district = np.array([jd is not None for jd in job_district_list])
+    work_district_p = np.where(
+        employed & has_job_district & (job_district_arr != profile.id),
+        SHOPPING_WORK_DISTRICT_BASE,
+        0.0,
+    )
+    centre_p = np.full(cnt, SHOPPING_CENTRE_BASE)
+    local_p = np.clip(1.0 - online_p - work_district_p - centre_p, 0.0, None)
+    total_p = local_p + online_p + work_district_p + centre_p
+    shopping_probs = np.stack([local_p, online_p, work_district_p, centre_p], axis=1) / total_p[:, None]
+    shopping_cum = np.cumsum(shopping_probs, axis=1)
+    shopping_idx = _inverse_cdf_sample(shopping_cum, rng.random(cnt))
+    shopping_options = np.array(
+        [ShoppingPlace.LOCAL, ShoppingPlace.ONLINE, ShoppingPlace.WORK_DISTRICT, ShoppingPlace.CENTRE],
+        dtype=object,
+    )
+    shopping_place = shopping_options[shopping_idx]
+
     agents: list[Agent] = []
     for i in range(cnt):
         agents.append(
@@ -409,6 +561,142 @@ def _generate_district(
                 satisfaction=float(satisfaction[i]),
                 days_unemployed=int(days_unemployed[i]),
                 tenure=tenure[i],
+                children=int(children[i]),
+                has_car=bool(has_car[i]),
+                commute_mode=commute_mode[i],
+                shopping_place=shopping_place[i],
+            )
+        )
+    return agents
+
+
+def spawn_arrivals(
+    profiles: list[DistrictProfile],
+    world: World,
+    n: int,
+    rng: np.random.Generator,
+    start_id: int,
+    tick: int,
+) -> list[Agent]:
+    """New households moving into Barcelona this tick (ids `start_id..start_id+n-1`).
+
+    Skewed young (`ARRIVAL_MIN_AGE`-`ARRIVAL_MAX_AGE`), mostly renters (`ARRIVAL_OWNER_SHARE`
+    owners), employed with probability `ARRIVAL_EMPLOYED_PROB` (exact quota). District choice
+    is weighted by `vacancy_rate * affordability` (affordability = 1 / avg_rent) read from
+    `world.states` -- more vacant, cheaper districts attract more arrivals. Renters take the
+    destination's *current* market rent (`world.states[d].avg_rent`, capped by an active
+    `rent_cap`); the rare owner arrival pays a plausible mortgage-style housing cost derived
+    the same way as `generate_population`'s owners. `lease_start_tick` and `arrived_tick` are
+    both set to `tick` (a brand new lease, arriving this tick). Skill mix is a fixed plausible
+    default (30/50/20 low/mid/high) since -- unlike `generate_population` -- there's no
+    city-wide mean income available here to relativize it against.
+
+    Does NOT mutate `world`: it's the caller's (market module's) job to account for the newly
+    occupied units / filled jobs. Deterministic for a given rng state.
+    """
+    if n <= 0:
+        return []
+    ids_arr = np.array([p.id for p in profiles], dtype=object)
+    d = len(profiles)
+
+    vacancy = np.array([world.states[p.id].vacancy_rate for p in profiles])
+    avg_rent_by_profile = np.array([world.states[p.id].avg_rent for p in profiles])
+    affordability = 1.0 / np.clip(avg_rent_by_profile, 1.0, None)
+    weight = np.clip(vacancy, 0.0, None) * affordability
+    if weight.sum() <= 0:
+        weight = np.ones(d)
+    cum = np.cumsum(weight / weight.sum())
+    dist_idx = _inverse_cdf_sample(np.broadcast_to(cum, (n, d)), rng.random(n))
+    home_ids = ids_arr[dist_idx]
+
+    ages = rng.integers(ARRIVAL_MIN_AGE, ARRIVAL_MAX_AGE + 1, size=n)
+
+    p_hh = np.clip((_HH_BASE_MEAN["18-34"] - 1.0) / 3.0, 0.02, 0.98)
+    household_size = 1 + rng.binomial(3, p_hh, size=n)
+
+    n_owners = _quota(ARRIVAL_OWNER_SHARE, n)
+    owner_idx = rng.permutation(n)[:n_owners]
+    tenure = np.empty(n, dtype=object)
+    tenure[:] = Tenure.RENTER
+    tenure[owner_idx] = Tenure.OWNER
+
+    n_employed = _quota(ARRIVAL_EMPLOYED_PROB, n)
+    employed_idx = rng.permutation(n)[:n_employed]
+    employed = np.zeros(n, dtype=bool)
+    employed[employed_idx] = True
+
+    job_weights = np.array([p.jobs_per_resident * p.population for p in profiles], dtype=float)
+    job_cum = np.cumsum(job_weights / job_weights.sum()) if job_weights.sum() > 0 else None
+    own_district = rng.random(n) < 0.5
+    other_idx = _inverse_cdf_sample(np.broadcast_to(job_cum, (n, d)), rng.random(n)) if job_cum is not None else None
+    job_district_list: list[DistrictId | None] = [None] * n
+    for i in range(n):
+        if not employed[i]:
+            continue
+        if own_district[i] or other_idx is None:
+            job_district_list[i] = home_ids[i]
+        else:
+            job_district_list[i] = ids_arr[other_idx[i]]
+
+    skill_probs = np.array([0.30, 0.50, 0.20])  # low, mid, high -- see docstring
+    skill_choice = _inverse_cdf_sample(np.broadcast_to(np.cumsum(skill_probs), (n, 3)), rng.random(n))
+    occ_options = np.array([Occupation.LOW_SKILL, Occupation.MID_SKILL, Occupation.HIGH_SKILL], dtype=object)
+    occ = occ_options[skill_choice]
+    mult_options = np.array([_SKILL_MULT["low"], _SKILL_MULT["mid"], _SKILL_MULT["high"]])
+    mult_arr = mult_options[skill_choice]
+    weighted_mult_mean = float(np.dot(skill_probs, mult_options))
+
+    hh_income_by_district = {p.id: _household_income_monthly(p) for p in profiles}
+    base_income = np.array([hh_income_by_district[hid] for hid in home_ids])
+    wage_base = base_income / max(weighted_mult_mean, 1e-6) * mult_arr
+    wage = rng.lognormal(mean=np.log(np.clip(wage_base, 1.0, None)), sigma=0.3)
+    wage = np.clip(wage, 450.0, 12000.0)
+
+    avg_rent_arr = np.array([world.states[hid].avg_rent for hid in home_ids])
+    rent_cap_arr = np.array(
+        [world.states[hid].rent_cap if world.states[hid].rent_cap is not None else np.inf for hid in home_ids]
+    )
+    base_rent = np.minimum(avg_rent_arr, rent_cap_arr)
+    rent = np.where(tenure == Tenure.RENTER, base_rent, 0.0)
+    owner_mask = tenure == Tenure.OWNER
+    noise = rng.lognormal(mean=0.0, sigma=MORTGAGE_NOISE_SIGMA, size=n)
+    owner_rent = np.clip(base_rent * MORTGAGE_RENT_FRACTION * noise, 50.0, 8000.0)
+    rent = np.where(owner_mask, owner_rent, rent)
+
+    income_monthly = np.where(employed, wage, 0.6 * wage)  # arrivals start with days_unemployed=0
+    rent_burden = rent / np.maximum(income_monthly, 1e-6)
+
+    months = np.clip(rng.lognormal(mean=np.log(1.0), sigma=0.5, size=n), 0.2, 4.0)
+    savings = months * wage
+
+    wage_rank = np.argsort(np.argsort(wage))
+    percentile = wage_rank / (n - 1) if n > 1 else np.full(n, 0.5)
+    conc = 8.0
+    mean_spend = np.clip(0.3 + 0.4 * percentile, 0.05, 0.95)
+    spending_level = rng.beta(mean_spend * conc, (1.0 - mean_spend) * conc)
+    mean_sat = np.clip(0.75 - 0.8 * rent_burden, 0.05, 0.95)
+    satisfaction = rng.beta(mean_sat * conc, (1.0 - mean_sat) * conc)
+
+    agents: list[Agent] = []
+    for i in range(n):
+        agents.append(
+            Agent(
+                id=start_id + i,
+                age=int(ages[i]),
+                household_size=int(household_size[i]),
+                occupation=occ[i],
+                wage_monthly=float(wage[i]),
+                employed=bool(employed[i]),
+                job_district=job_district_list[i],
+                home=home_ids[i],
+                rent_monthly=float(rent[i]),
+                lease_start_tick=tick,
+                savings=float(savings[i]),
+                spending_level=float(spending_level[i]),
+                satisfaction=float(satisfaction[i]),
+                days_unemployed=0,
+                tenure=tenure[i],
+                arrived_tick=tick,
             )
         )
     return agents

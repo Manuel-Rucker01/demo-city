@@ -9,8 +9,10 @@ import random
 from jevcity.types import (
     Action,
     AgentDecision,
+    CommuteMode,
     DecisionRequest,
     JevResponse,
+    ShoppingPlace,
     question_key,
 )
 
@@ -143,6 +145,27 @@ def parse_decisions(
             else:
                 satisfaction = _score_fraction(satisfaction_ans)
 
+            # commute_mode / shopping_place are conditional questions (see state_builder's
+            # wants_commute_question/wants_shopping_question): tolerate their absence, and
+            # tolerate an unrecognized choice (None = "not asked / keep current").
+            commute_mode = None
+            commute_ans = resp.answers.get(question_key(agent_id, "commute_mode"))
+            if commute_ans is not None:
+                chosen = _pick(commute_ans, policy, seed, req.tick, agent_id, "commute_mode")
+                try:
+                    commute_mode = CommuteMode(chosen)
+                except ValueError:
+                    commute_mode = None
+
+            shopping_place = None
+            shopping_ans = resp.answers.get(question_key(agent_id, "shopping_place"))
+            if shopping_ans is not None:
+                chosen = _pick(shopping_ans, policy, seed, req.tick, agent_id, "shopping_place")
+                try:
+                    shopping_place = ShoppingPlace(chosen)
+                except ValueError:
+                    shopping_place = None
+
             decisions.append(
                 AgentDecision(
                     agent_id=agent_id,
@@ -154,6 +177,8 @@ def parse_decisions(
                     confidence=confidence,
                     gated=gated,
                     action_probs=probs,
+                    commute_mode=commute_mode,
+                    shopping_place=shopping_place,
                 )
             )
 

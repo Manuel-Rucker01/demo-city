@@ -1,5 +1,7 @@
 name: base
-description: Baseline Barcelona, 5 districts, no policy intervention.
+description: >-
+  Baseline Barcelona (every district in data/processed/districts.json, no districts filter),
+  no policy intervention.
 seed: 42
 ticks: 365
 n_agents: 1000

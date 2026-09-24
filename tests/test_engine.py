@@ -84,7 +84,7 @@ class _Harness:
     """Patches every engine_loop collaborator with call-order-tracking fakes."""
 
     def __init__(self, monkeypatch, *, events_by_tick, requests_by_tick, decisions_by_tick,
-                 delta_by_tick, k=7):
+                 delta_by_tick, daily_delta_by_tick=None, k=7):
         self.calls: list[tuple[str, int]] = []
         self.k = k
         self.k_seen: list[int] = []
@@ -92,12 +92,12 @@ class _Harness:
             SimpleNamespace(
                 id=1, age=30, occupation="mid_skill", home="d1", employed=True,
                 job_district="d1", wage_monthly=2000.0, rent_monthly=900.0, satisfaction=0.6,
-                tenure=Tenure.RENTER,
+                tenure=Tenure.RENTER, children=0, has_car=False, commute_mode=None,
             ),
             SimpleNamespace(
                 id=2, age=40, occupation="mid_skill", home="d1", employed=True,
                 job_district="d1", wage_monthly=2200.0, rent_monthly=950.0, satisfaction=0.5,
-                tenure=Tenure.RENTER,
+                tenure=Tenure.RENTER, children=0, has_car=False, commute_mode=None,
             ),
         ]
         world = SimpleNamespace(tick=0, states={"d1": None, "d2": None}, profiles={}, rent_history={})
@@ -121,9 +121,12 @@ class _Harness:
             self.calls.append(("detect_events", tick))
             return events_by_tick.get(tick, [])
 
+        self.events_seen: dict[int, list] = {}
+
         def fake_build_requests(w, agents, events, tick, agents_per_request):
             self.calls.append(("build_requests", tick))
             self.k_seen.append(agents_per_request)
+            self.events_seen[tick] = events
             return requests_by_tick.get(tick, [])
 
         def fake_parse_decisions(reqs, responses, threshold, **kwargs):
@@ -139,8 +142,19 @@ class _Harness:
             self.calls.append(("daily_update", tick))
             return []
 
-        def fake_build_district_snapshots(w, agents):
+        def fake_daily_update_ex(w, agents, scenario, tick, rng):
+            self.calls.append(("daily_update_ex", tick))
+            return (daily_delta_by_tick or {}).get(tick, TickDelta(moves=[], changes=[]))
+
+        # A list, not a dict keyed by tick: the engine also calls build_district_snapshots
+        # once more in its `finally` block (final_districts, no arrivals/departures kwargs) at
+        # the same tick number as the loop's last iteration, which would otherwise clobber a
+        # dict entry.
+        self.snapshot_calls: list[tuple[int, list | None, list | None]] = []
+
+        def fake_build_district_snapshots(w, agents, arrivals=None, departures=None):
             self.calls.append(("build_district_snapshots", w.tick))
+            self.snapshot_calls.append((w.tick, arrivals, departures))
             return [
                 DistrictSnapshot(
                     id="d1", avg_rent=1000.0, avg_paid_rent=950.0, residents=2,
@@ -162,6 +176,7 @@ class _Harness:
         monkeypatch.setattr(engine_loop.decision_parse, "parse_decisions", fake_parse_decisions)
         monkeypatch.setattr(engine_loop.market, "apply_decisions", fake_apply_decisions)
         monkeypatch.setattr(engine_loop.market, "daily_update", fake_daily_update)
+        monkeypatch.setattr(engine_loop.market, "daily_update_ex", fake_daily_update_ex, raising=False)
         monkeypatch.setattr(
             engine_loop.snapshot, "build_district_snapshots", fake_build_district_snapshots
         )
@@ -229,14 +244,14 @@ async def test_pipeline_order_ticks_and_usage_diff(tmp_path, monkeypatch):
     tick1_calls = [name for name, t in harness.calls if t == 1]
     assert tick1_calls == [
         "apply_policies", "detect_events", "build_requests", "parse_decisions",
-        "apply_decisions", "daily_update", "build_district_snapshots",
+        "apply_decisions", "daily_update_ex", "build_district_snapshots",
     ]
     # tick 2 has no requests: parse_decisions must not run
     tick2_calls = [name for name, t in harness.calls if t == 2]
     assert "parse_decisions" not in tick2_calls
     assert tick2_calls == [
         "apply_policies", "detect_events", "build_requests",
-        "apply_decisions", "daily_update", "build_district_snapshots",
+        "apply_decisions", "daily_update_ex", "build_district_snapshots",
     ]
 
     reader = RunReader(run_dir)
@@ -391,3 +406,195 @@ async def test_writer_and_backend_closed_on_unexpected_exception(tmp_path, monke
     summary = reader.summary()
     assert summary is not None
     assert summary.ticks == 1
+
+
+# --- migration: market.daily_update_ex arrivals/departures ------------------------------------
+
+
+def _new_agent(agent_id: int, home: str = "d1") -> SimpleNamespace:
+    return SimpleNamespace(
+        id=agent_id, age=28, occupation="mid_skill", home=home, employed=True,
+        job_district=home, wage_monthly=1800.0, rent_monthly=850.0, satisfaction=0.55,
+        tenure=Tenure.RENTER, children=0, has_car=False, commute_mode=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_daily_update_ex_arrivals_are_merged_and_arrived_event_queued_next_tick(
+    tmp_path, monkeypatch
+):
+    """market.daily_update_ex (when present) supersedes daily_update: its TickDelta.arrivals
+    are added to agents_by_id, written to TickRecord.arrivals as AgentSnapshots, and each
+    queues an ARRIVED event that must show up in the *next* tick's events (merged into
+    whatever detect_events itself returns for that tick, here nothing)."""
+    events_by_tick = {
+        1: [Event(agent_id=1, kind=EventKind.PAYDAY)],
+        2: [],  # detect_events finds nothing tick 2; the ARRIVED event must still appear
+    }
+    req1 = DecisionRequest(request_id="t1-r0", tick=1, agent_ids=[1], state={}, questions={})
+    requests_by_tick = {1: [req1]}
+    decisions_by_tick = {1: []}
+
+    harness = _Harness(
+        monkeypatch,
+        events_by_tick=events_by_tick,
+        requests_by_tick=requests_by_tick,
+        decisions_by_tick=decisions_by_tick,
+        delta_by_tick={},
+    )
+
+    new_agent = _new_agent(99)
+
+    def fake_daily_update_ex(w, agents, scenario, tick, rng):
+        if tick == 1:
+            agents[new_agent.id] = new_agent  # daily_update_ex owns inserting into agents_by_id
+            return TickDelta(moves=[], changes=[], arrivals=[new_agent], departures=[])
+        return TickDelta(moves=[], changes=[])
+
+    monkeypatch.setattr(engine_loop.market, "daily_update_ex", fake_daily_update_ex, raising=False)
+
+    usage1 = Usage(requests=1, models_seen={"jev-test-model": 1})
+    backend = FakeBackend(
+        responses_by_tick={1: [_resp("jev-test-model")]}, usage_by_tick={1: usage1}
+    )
+
+    scenario = _scenario(ticks=2)
+    run_dir = tmp_path / "run_arrivals"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    # tick 1: the new arrival is written to TickRecord.arrivals as an AgentSnapshot, and passed
+    # by id into build_district_snapshots's `arrivals` kwarg.
+    reader = RunReader(run_dir)
+    t1, _t2 = list(reader.ticks())
+    assert [a.id for a in t1.arrivals] == [99]
+    assert t1.arrivals[0].home == "d1"
+    # first snapshot call for tick 1 is the mid-loop one (the `finally` block's final snapshot
+    # call, with no arrivals/departures, comes after every tick and isn't what we're checking).
+    first_tick1_call = next(c for c in harness.snapshot_calls if c[0] == 1)
+    assert first_tick1_call[1] == [99]
+
+    # tick 2: the queued ARRIVED event was merged into detect_events' (empty) output.
+    assert harness.events_seen[2] == [Event(agent_id=99, kind=EventKind.ARRIVED)]
+
+
+@pytest.mark.asyncio
+async def test_departures_from_decisions_and_daily_update_ex_are_merged(tmp_path, monkeypatch):
+    events_by_tick = {1: [Event(agent_id=1, kind=EventKind.PAYDAY)]}
+    req1 = DecisionRequest(request_id="t1-r0", tick=1, agent_ids=[1], state={}, questions={})
+    requests_by_tick = {1: [req1]}
+    decisions_by_tick = {1: []}
+    # apply_decisions' own TickDelta reports agent 1 leaving via a LEAVE_CITY decision.
+    delta_by_tick = {1: TickDelta(moves=[], changes=[], departures=[1])}
+
+    harness = _Harness(
+        monkeypatch,
+        events_by_tick=events_by_tick,
+        requests_by_tick=requests_by_tick,
+        decisions_by_tick=decisions_by_tick,
+        delta_by_tick=delta_by_tick,
+    )
+
+    def fake_daily_update_ex(w, agents, scenario, tick, rng):
+        # daily_update_ex's own migration-out rule adds agent 2 as a departure too.
+        return TickDelta(moves=[], changes=[], arrivals=[], departures=[2])
+
+    monkeypatch.setattr(engine_loop.market, "daily_update_ex", fake_daily_update_ex, raising=False)
+
+    usage1 = Usage(requests=1, models_seen={"jev-test-model": 1})
+    backend = FakeBackend(
+        responses_by_tick={1: [_resp("jev-test-model")]}, usage_by_tick={1: usage1}
+    )
+
+    scenario = _scenario(ticks=1)
+    run_dir = tmp_path / "run_departures"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    reader = RunReader(run_dir)
+    (t1,) = list(reader.ticks())
+    assert sorted(t1.departures) == [1, 2]
+    first_tick1_call = next(c for c in harness.snapshot_calls if c[0] == 1)
+    assert sorted(first_tick1_call[2]) == [1, 2]
+
+
+@pytest.mark.asyncio
+async def test_daily_update_falls_back_when_daily_update_ex_absent(tmp_path, monkeypatch):
+    """If market.daily_update_ex isn't present (module mid-change) -> no arrivals/departures,
+    and the old daily_update(...) -> list[AgentChange] signature is used instead."""
+    events_by_tick = {1: [Event(agent_id=1, kind=EventKind.PAYDAY)]}
+    req1 = DecisionRequest(request_id="t1-r0", tick=1, agent_ids=[1], state={}, questions={})
+    requests_by_tick = {1: [req1]}
+    decisions_by_tick = {1: []}
+
+    harness = _Harness(
+        monkeypatch,
+        events_by_tick=events_by_tick,
+        requests_by_tick=requests_by_tick,
+        decisions_by_tick=decisions_by_tick,
+        delta_by_tick={},
+    )
+    # Simulate the (today-real) state where market.daily_update_ex hasn't landed yet.
+    monkeypatch.delattr(engine_loop.market, "daily_update_ex", raising=False)
+    assert not hasattr(engine_loop.market, "daily_update_ex")
+
+    usage1 = Usage(requests=1, models_seen={"jev-test-model": 1})
+    backend = FakeBackend(
+        responses_by_tick={1: [_resp("jev-test-model")]}, usage_by_tick={1: usage1}
+    )
+
+    scenario = _scenario(ticks=1)
+    run_dir = tmp_path / "run_no_migration"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    reader = RunReader(run_dir)
+    (t1,) = list(reader.ticks())
+    assert t1.arrivals == []
+    assert t1.departures == []
+    assert ("daily_update", 1) in harness.calls
+    assert ("daily_update_ex", 1) not in harness.calls
+
+
+# --- prompts: max_districts_in_state passthrough -----------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_max_districts_in_state_passed_when_build_requests_accepts_it(tmp_path, monkeypatch):
+    events_by_tick = {1: [Event(agent_id=1, kind=EventKind.PAYDAY)]}
+    req1 = DecisionRequest(request_id="t1-r0", tick=1, agent_ids=[1], state={}, questions={})
+    requests_by_tick = {1: [req1]}
+    decisions_by_tick = {1: []}
+
+    _Harness(
+        monkeypatch,
+        events_by_tick=events_by_tick,
+        requests_by_tick=requests_by_tick,
+        decisions_by_tick=decisions_by_tick,
+        delta_by_tick={},
+    )
+
+    captured: dict = {}
+
+    def fake_build_requests_with_kwarg(
+        w, agents, events, tick, agents_per_request, max_districts_in_state=None
+    ):
+        captured["max_districts_in_state"] = max_districts_in_state
+        return requests_by_tick.get(tick, [])
+
+    monkeypatch.setattr(
+        engine_loop.state_builder, "build_requests", fake_build_requests_with_kwarg
+    )
+
+    usage1 = Usage(requests=1, models_seen={"jev-test-model": 1})
+    backend = FakeBackend(
+        responses_by_tick={1: [_resp("jev-test-model")]}, usage_by_tick={1: usage1}
+    )
+
+    scenario = _scenario(ticks=1)
+    scenario.prompt.max_districts_in_state = 3
+    run_dir = tmp_path / "run_maxdist"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    assert captured["max_districts_in_state"] == 3

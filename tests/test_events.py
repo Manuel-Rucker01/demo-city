@@ -35,10 +35,11 @@ def make_agent(
     days_unemployed=0,
     last_move_tick=None,
     tenure=Tenure.RENTER,
+    children=0,
 ) -> Agent:
     if employed and job_district is None:
         job_district = home
-    if not employed:
+    if not employed and job_district is None:
         job_district = None
     return Agent(
         id=id,
@@ -57,6 +58,7 @@ def make_agent(
         days_unemployed=days_unemployed,
         last_move_tick=last_move_tick,
         tenure=tenure,
+        children=children,
     )
 
 
@@ -302,3 +304,171 @@ def test_performance_daily_update_and_detect_events_10000_agents(profiles):
     daily_update(world, agents_dict, scenario, 1, rng)
     elapsed = time.perf_counter() - start
     assert elapsed < 0.05
+
+
+# --- inactive agents ------------------------------------------------------------------------
+
+
+def test_inactive_agents_get_no_events(profiles):
+    rng = np.random.default_rng(0)
+    agent = make_agent(0, profiles[0].id, employed=True, children=0)
+    agent.active = False
+    world = init_world(profiles, [agent])
+    agents_dict = {0: agent}
+    params = EventParams(job_loss_daily_prob=1.0, job_offer_daily_prob=1.0, life_event_daily_prob=1.0)
+    events = detect_events(world, agents_dict, tick=params.school_year_tick, params=params, rng=rng)
+    assert events == []
+
+
+# --- school year ---------------------------------------------------------------------------
+
+
+def test_school_year_fires_only_for_parents_on_the_right_tick(profiles):
+    rng = np.random.default_rng(0)
+    parent = make_agent(0, profiles[0].id)
+    parent.children = 2
+    childless = make_agent(1, profiles[0].id)
+    world = init_world(profiles, [parent, childless])
+    agents_dict = {0: parent, 1: childless}
+    params = EventParams(job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0)
+
+    # wrong tick: no SCHOOL_YEAR at all
+    events_before = detect_events(world, agents_dict, tick=params.school_year_tick - 1, params=params, rng=rng)
+    assert not any(e.kind == EventKind.SCHOOL_YEAR for e in events_before)
+
+    # right tick: only the parent
+    events_on = detect_events(world, agents_dict, tick=params.school_year_tick, params=params, rng=rng)
+    school_events = [e for e in events_on if e.kind == EventKind.SCHOOL_YEAR]
+    assert [e.agent_id for e in school_events] == [0]
+
+    # fires again exactly one year later
+    events_next_year = detect_events(
+        world, agents_dict, tick=params.school_year_tick + 365, params=params, rng=rng
+    )
+    school_events_next = [e for e in events_next_year if e.kind == EventKind.SCHOOL_YEAR]
+    assert [e.agent_id for e in school_events_next] == [0]
+
+
+# --- transit change --------------------------------------------------------------------------
+
+
+def test_transit_change_fires_once_when_boost_changes(profiles):
+    rng = np.random.default_rng(0)
+    home_agent = make_agent(0, profiles[0].id, employed=False)
+    job_agent = make_agent(1, profiles[1].id, employed=True, job_district=profiles[0].id)
+    unrelated = make_agent(2, profiles[2].id, employed=False)
+    world = init_world(profiles, [home_agent, job_agent, unrelated])
+    agents_dict = {a.id: a for a in [home_agent, job_agent, unrelated]}
+    params = EventParams(job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0)
+
+    # tick 1: establishes the cache baseline, no event yet
+    events1 = detect_events(world, agents_dict, tick=1, params=params, rng=rng)
+    assert not any(e.kind == EventKind.TRANSIT_CHANGE for e in events1)
+
+    # the boost changes on district 0 (home of agent 0, job district of agent 1)
+    world.states[profiles[0].id].transit_boost = 0.2
+    events2 = detect_events(world, agents_dict, tick=2, params=params, rng=rng)
+    transit_events = {e.agent_id: e.payload for e in events2 if e.kind == EventKind.TRANSIT_CHANGE}
+    assert set(transit_events.keys()) == {0, 1}
+    assert transit_events[0]["kind"] == "new_line"
+    assert 2 not in transit_events
+
+    # unchanged next tick: must not refire
+    events3 = detect_events(world, agents_dict, tick=3, params=params, rng=rng)
+    assert not any(e.kind == EventKind.TRANSIT_CHANGE for e in events3)
+
+
+def test_low_emission_zone_change_fires_with_correct_payload(profiles):
+    rng = np.random.default_rng(0)
+    agent = make_agent(0, profiles[0].id, employed=False)
+    world = init_world(profiles, [agent])
+    agents_dict = {0: agent}
+    params = EventParams(job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0)
+
+    detect_events(world, agents_dict, tick=1, params=params, rng=rng)  # baseline
+    world.states[profiles[0].id].low_emission_zone = True
+    events = detect_events(world, agents_dict, tick=2, params=params, rng=rng)
+    lez_events = [e for e in events if e.kind == EventKind.TRANSIT_CHANGE and e.payload.get("kind") == "low_emission_zone"]
+    assert len(lez_events) == 1
+    assert lez_events[0].agent_id == 0
+
+
+# --- tourism pressure ------------------------------------------------------------------------
+
+
+def test_tourism_pressure_scales_with_tourist_share(profiles):
+    rng = np.random.default_rng(0)
+    agents = [make_agent(i, profiles[0].id, employed=False) for i in range(500)]
+    world = init_world(profiles, agents)
+    state = world.states[profiles[0].id]
+    state.tourist_units = round(0.5 * state.housing_units)  # high tourist share
+    agents_dict = {a.id: a for a in agents}
+    params = EventParams(
+        job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0,
+        tourism_pressure_daily_prob=0.5,
+    )
+    events = detect_events(world, agents_dict, tick=1, params=params, rng=rng)
+    n_tourism = sum(1 for e in events if e.kind == EventKind.TOURISM_PRESSURE)
+    tourist_share = state.tourist_units / state.housing_units
+    expected_rate = params.tourism_pressure_daily_prob * tourist_share
+    assert abs(n_tourism / len(agents) - expected_rate) < 0.15
+
+    for e in events:
+        if e.kind == EventKind.TOURISM_PRESSURE:
+            assert e.payload["tourist_share"] == pytest.approx(tourist_share)
+
+
+def test_tourism_pressure_zero_when_no_tourist_units(profiles):
+    rng = np.random.default_rng(0)
+    agents = [make_agent(i, profiles[0].id, employed=False) for i in range(100)]
+    world = init_world(profiles, agents)
+    agents_dict = {a.id: a for a in agents}
+    params = EventParams(
+        job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0,
+        tourism_pressure_daily_prob=1.0,
+    )
+    events = detect_events(world, agents_dict, tick=1, params=params, rng=rng)
+    assert not any(e.kind == EventKind.TOURISM_PRESSURE for e in events)
+
+
+def test_tourism_pressure_owners_excluded(profiles):
+    rng = np.random.default_rng(0)
+    agent = make_agent(0, profiles[0].id, employed=False, tenure=Tenure.OWNER)
+    world = init_world(profiles, [agent])
+    world.states[profiles[0].id].tourist_units = round(0.9 * world.states[profiles[0].id].housing_units)
+    agents_dict = {0: agent}
+    params = EventParams(
+        job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0,
+        tourism_pressure_daily_prob=1.0,
+    )
+    events = detect_events(world, agents_dict, tick=1, params=params, rng=rng)
+    assert not any(e.kind == EventKind.TOURISM_PRESSURE for e in events)
+
+
+# --- shop closed -----------------------------------------------------------------------------
+
+
+def test_shop_closed_fires_after_a_drop(profiles):
+    rng = np.random.default_rng(0)
+    agents = [make_agent(i, profiles[0].id, employed=False) for i in range(400)]
+    world = init_world(profiles, agents)
+    state = world.states[profiles[0].id]
+    state.shops_open = 100
+    agents_dict = {a.id: a for a in agents}
+    params = EventParams(job_loss_daily_prob=0.0, job_offer_daily_prob=0.0, life_event_daily_prob=0.0)
+
+    events1 = detect_events(world, agents_dict, tick=1, params=params, rng=rng)  # baseline
+    assert not any(e.kind == EventKind.SHOP_CLOSED for e in events1)
+
+    state.shops_open = 80  # 20% of shops closed
+    events2 = detect_events(world, agents_dict, tick=2, params=params, rng=rng)
+    shop_events = [e for e in events2 if e.kind == EventKind.SHOP_CLOSED]
+    assert shop_events
+    for e in shop_events:
+        assert e.payload["closed_pct"] == pytest.approx(0.2)
+    # fires probabilistically (~0.3), not for every resident
+    assert len(shop_events) < len(agents)
+
+    # steady state afterwards: no more events without a further drop
+    events3 = detect_events(world, agents_dict, tick=3, params=params, rng=rng)
+    assert not any(e.kind == EventKind.SHOP_CLOSED for e in events3)

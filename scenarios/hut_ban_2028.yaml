@@ -1,0 +1,14 @@
+extends: base.yaml
+name: hut_ban_2028
+description: >-
+  City-wide tourist-flat (HUT) phase-out: tourist_units shrink linearly to zero between
+  tick 30 and tick 365. Barcelona's real plan is to revoke ~10,000 HUT licences by
+  November 2028 (~3 years, not ~1 year) - this scenario compresses that timeline to fit
+  inside a 365-tick (1-year) run so the effect is visible within the sim horizon.
+policies:
+  - type: tourist_flat_ban
+    districts: all
+    start_tick: 30
+    end_tick: 365
+    reduction: 1.0
+    return_to_rental_share: 1.0

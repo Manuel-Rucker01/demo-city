@@ -224,3 +224,120 @@ def test_optional_field_out_of_range_raises_value_error(
     f = _write(tmp_path, [row])
     with pytest.raises(ValueError, match="outside sane range"):
         load_profiles(f)
+
+
+# --- New realism fields (10-district expansion): area_km2, tourist_flats, car_ownership,
+# commute_mode_share, households_with_children_share ---------------------------------------
+
+
+def test_new_optional_fields_default_to_none(tmp_path: Path) -> None:
+    f = _write(tmp_path, [_good_row()])
+    p = load_profiles(f)[0]
+    assert p.area_km2 is None
+    assert p.tourist_flats is None
+    assert p.car_ownership is None
+    assert p.commute_mode_share is None
+    assert p.households_with_children_share is None
+
+
+def test_new_optional_fields_load_when_set_with_source(tmp_path: Path) -> None:
+    row = _good_row()
+    row["area_km2"] = 4.5
+    row["tourist_flats"] = 500
+    row["car_ownership"] = 0.4
+    row["commute_mode_share"] = {"metro": 0.3, "bus": 0.2, "car": 0.2, "bike": 0.05, "walk": 0.25}
+    row["households_with_children_share"] = 0.2
+    for field in (
+        "area_km2",
+        "tourist_flats",
+        "car_ownership",
+        "commute_mode_share",
+        "households_with_children_share",
+    ):
+        row["sources"][field] = Source.OPENDATA.value
+    f = _write(tmp_path, [row])
+    p = load_profiles(f)[0]
+    assert p.area_km2 == 4.5
+    assert p.tourist_flats == 500
+    assert p.car_ownership == 0.4
+    assert p.commute_mode_share == {
+        "metro": 0.3,
+        "bus": 0.2,
+        "car": 0.2,
+        "bike": 0.05,
+        "walk": 0.25,
+    }
+    assert p.households_with_children_share == 0.2
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("area_km2", 0.0),
+        ("area_km2", 100.0),
+        ("tourist_flats", -1.0),
+        ("car_ownership", 1.5),
+        ("car_ownership", -0.1),
+        ("households_with_children_share", 1.5),
+        ("households_with_children_share", -0.1),
+    ],
+)
+def test_new_optional_field_out_of_range_raises_value_error(
+    tmp_path: Path, field: str, bad_value: float
+) -> None:
+    row = _good_row()
+    row[field] = bad_value
+    row["sources"][field] = Source.OPENDATA.value
+    f = _write(tmp_path, [row])
+    with pytest.raises(ValueError, match="outside sane range"):
+        load_profiles(f)
+
+
+def test_commute_mode_share_set_without_source_raises_value_error(tmp_path: Path) -> None:
+    row = _good_row()
+    row["commute_mode_share"] = {"metro": 0.5, "bus": 0.5}
+    f = _write(tmp_path, [row])
+    with pytest.raises(ValueError, match="commute_mode_share is set but has no sources entry"):
+        load_profiles(f)
+
+
+def test_commute_mode_share_unknown_mode_raises_value_error(tmp_path: Path) -> None:
+    row = _good_row()
+    row["commute_mode_share"] = {"metro": 0.5, "spaceship": 0.5}
+    row["sources"]["commute_mode_share"] = Source.DERIVED.value
+    f = _write(tmp_path, [row])
+    with pytest.raises(ValueError, match="unknown mode"):
+        load_profiles(f)
+
+
+def test_commute_mode_share_not_summing_to_one_raises_value_error(tmp_path: Path) -> None:
+    row = _good_row()
+    row["commute_mode_share"] = {"metro": 0.5, "bus": 0.1}
+    row["sources"]["commute_mode_share"] = Source.DERIVED.value
+    f = _write(tmp_path, [row])
+    with pytest.raises(ValueError, match="sums to"):
+        load_profiles(f)
+
+
+def test_commute_mode_share_value_out_of_range_raises_value_error(tmp_path: Path) -> None:
+    row = _good_row()
+    row["commute_mode_share"] = {"metro": 1.5, "bus": -0.5}
+    row["sources"]["commute_mode_share"] = Source.DERIVED.value
+    f = _write(tmp_path, [row])
+    with pytest.raises(ValueError, match="outside sane range"):
+        load_profiles(f)
+
+
+def test_commute_mode_share_tolerates_tiny_rounding_drift(tmp_path: Path) -> None:
+    row = _good_row()
+    row["commute_mode_share"] = {
+        "metro": 0.3001,
+        "bus": 0.2,
+        "car": 0.2,
+        "bike": 0.05,
+        "walk": 0.25,
+    }
+    row["sources"]["commute_mode_share"] = Source.DERIVED.value
+    f = _write(tmp_path, [row])
+    profiles = load_profiles(f)
+    assert len(profiles) == 1

@@ -5,17 +5,16 @@
 
 import * as echarts from "echarts";
 import { CHART_THEME_NAME } from "./theme";
-import { DISTRICT_IDS, type DistrictId, type TickRecord } from "../data/types";
-import { DISTRICT_COLORS, FG_DIM, ACCENT } from "../style/theme";
+import { DISTRICT_IDS, type DistrictId, type Policy, type TickRecord } from "../data/types";
+import { DISTRICT_COLORS, FG_DIM } from "../style/theme";
 import { districtDisplayName } from "../data/format";
+import { policyMarkLineSeries, policyMarks } from "./policyAnnotations";
 
 export interface LineSeriesSpec {
   runLabel: "base" | "scenario";
   ticks: TickRecord[];
   metric: (d: TickRecord["districts"][number]) => number;
   highlightDistrict?: DistrictId | null;
-  /** Tick index (1-based) a policy affecting `highlightDistrict` starts — draws a "cap starts" annotation. */
-  policyStartTick?: number | null;
 }
 
 export class LineChartPanel {
@@ -25,7 +24,7 @@ export class LineChartPanel {
   /** Record mode: tooltips are fully disabled (no hover, no programmatic showTip) — this panel
    * is view-only on a recording, so a lingering tooltip box would just be visual clutter/bug. */
   private tooltipsEnabled: boolean;
-  private annotationTick: number | null = null;
+  private policies: Policy[] = [];
 
   constructor(container: HTMLElement, title: string, valueFormatter: (v: number) => string, opts: { tooltipsEnabled?: boolean } = {}) {
     this.title = title;
@@ -66,12 +65,13 @@ export class LineChartPanel {
     };
   }
 
-  /** Render one or two (compare) run series, one line per district. */
-  setData(specs: LineSeriesSpec[]): void {
+  /** Render one or two (compare) run series, one line per district. `policies` (usually
+   * `meta.scenario.policies`) draws a short markLine annotation per policy start/end. */
+  setData(specs: LineSeriesSpec[], policies: Policy[] = []): void {
     const dates = specs[0]?.ticks.map((t) => t.date) ?? [];
     const series: echarts.SeriesOption[] = [];
     const hasHighlight = specs.some((s) => s.highlightDistrict);
-    this.annotationTick = specs.find((s) => s.highlightDistrict && s.policyStartTick != null)?.policyStartTick ?? null;
+    this.policies = policies;
 
     for (const spec of specs) {
       for (const did of DISTRICT_IDS) {
@@ -103,30 +103,11 @@ export class LineChartPanel {
     this.renderAnnotation();
   }
 
-  /** Draws a static "cap starts" vertical marker at the policy start tick, if any (independent
-   * of playback position — this doesn't move as the time cursor scrubs). */
+  /** Draws static policy-start/end vertical markers (independent of playback position — these
+   * don't move as the time cursor scrubs). */
   private renderAnnotation(): void {
-    if (this.annotationTick == null) {
-      this.chart.setOption({ series: [{ id: "policy-annotation", type: "line", data: [], markLine: { data: [] } }] });
-      return;
-    }
-    this.chart.setOption({
-      series: [
-        {
-          id: "policy-annotation",
-          type: "line",
-          data: [],
-          markLine: {
-            symbol: "none",
-            silent: true,
-            animation: false,
-            lineStyle: { color: ACCENT, width: 1.5, type: "dashed" },
-            label: { show: true, formatter: "cap starts", color: ACCENT, fontSize: 10, position: "insideEndTop" },
-            data: [{ xAxis: Math.max(0, this.annotationTick - 1) }],
-          },
-        },
-      ],
-    });
+    const marks = policyMarks(this.policies);
+    this.chart.setOption({ series: [policyMarkLineSeries(marks)] });
   }
 
   /** Move the vertical time cursor to tick index `i` (synced to playback). Never opens a
