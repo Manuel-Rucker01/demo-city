@@ -153,6 +153,30 @@ class RateLimiter:
             self._current_tps = min(self._configured_tps, self._current_tps + step)
             self._tokens.set_rate(self._current_tps, self._current_tps)
 
+    def apply_server_limits(
+        self,
+        limit_requests: float | None,
+        remaining_requests: int | None,
+        reset_s: float | None,
+        safety: float = 0.9,
+    ) -> None:
+        """Adopt limits the server advertises (e.g. Vercel's `x-ratelimit-limit-requests: 30`,
+        observed 2026-09-24). The advertised per-minute limit caps the configured one for the
+        rest of the run; `remaining == 0` pauses everyone until the window resets."""
+        if limit_requests is not None and limit_requests > 0:
+            advertised = limit_requests * safety
+            if self._configured_rpm is None or advertised < self._configured_rpm:
+                self._configured_rpm = advertised
+                self._current_rpm = min(self._current_rpm or advertised, advertised)
+                if self._requests is None:
+                    self._requests = _TokenBucket(
+                        capacity=self._current_rpm, rate=self._current_rpm / 60.0, clock=self._clock
+                    )
+                else:
+                    self._requests.set_rate(self._current_rpm, self._current_rpm / 60.0)
+        if remaining_requests == 0 and reset_s:
+            self._pause_until = max(self._pause_until, self._clock.time() + reset_s)
+
     @property
     def current_rpm(self) -> float | None:
         return self._current_rpm

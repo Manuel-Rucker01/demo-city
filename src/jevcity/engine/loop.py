@@ -39,10 +39,10 @@ from jevcity.world import market
 
 logger = logging.getLogger(__name__)
 
-# K estimation constants (see docs/CONTRACTS.md "Batching"). Measured on the prompts module with
-# K=3 (len(json)/4): ~167 state + ~472 question tokens per agent; shared district table ~200.
-EST_TOKENS_PER_AGENT = 650
-EST_SHARED_TOKENS = 200
+# K estimation constants (see docs/CONTRACTS.md "Batching"), in real tokens: prompts measured
+# ~640 len/4-units per agent at K=3, and real calls count ~1.7x more (2.3 chars/token).
+EST_TOKENS_PER_AGENT = 1100
+EST_SHARED_TOKENS = 350
 
 PROGRESS_EVERY_TICKS = 30
 

@@ -333,3 +333,49 @@ async def test_retries_exhausted_raises():
         await backend.aclose()
     assert route.call_count == 3  # 1 initial + 2 retries
     assert exc_info.value.attempts == 3
+
+
+async def test_server_rate_limit_headers_are_adopted_and_retries_reacquire(monkeypatch):
+    """Vercel sends x-ratelimit-* headers (observed 2026-09-24): limit 30 req/min, reset 32s."""
+    import httpx
+    import respx
+
+    from jevcity.jev import make_backend
+    from jevcity.types import DecisionRequest, JevConfig
+
+    monkeypatch.setenv("AI_GATEWAY_API_KEY", "test-key")
+    monkeypatch.delenv("JEV_PROVIDER", raising=False)
+    cfg = JevConfig(provider="vercel", max_retries=2)
+    backend = make_backend(cfg)
+    sleeps: list[float] = []
+
+    async def fake_sleep(s: float) -> None:
+        sleeps.append(s)
+
+    backend._sleep = fake_sleep  # type: ignore[attr-defined]
+    limited = httpx.Response(
+        429,
+        headers={
+            "retry-after": "0",
+            "x-ratelimit-limit-requests": "30",
+            "x-ratelimit-remaining-requests": "5",
+            "x-ratelimit-reset-requests": "32s",
+        },
+        json={"error": {"message": "busy", "type": "rate_limit_exceeded"}},
+    )
+    ok = httpx.Response(
+        200,
+        json={"model": "typesafe-ai/jev", "answers": {"q": {"type": "noul", "noul": 0.9}},
+              "usage": {"input_tokens": 10, "output_tokens": 1}},
+    )
+    req = DecisionRequest(
+        request_id="r", tick=1, agent_ids=[1], state="s",
+        questions={"q": {"type": "noul", "instructions": "?"}},
+    )
+    with respx.mock(base_url="https://ai-gateway.vercel.sh") as mock:
+        route = mock.post("/typesafe/v1/systemone").mock(side_effect=[limited, ok])
+        [resp] = await backend.evaluate_many([req])
+    assert route.call_count == 2
+    assert resp.answers["q"]["noul"] == 0.9
+    assert backend._limiter.current_rpm <= 30 * cfg.rate_safety  # type: ignore[attr-defined]
+    await backend.aclose()

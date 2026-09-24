@@ -13,14 +13,17 @@ from jevcity.types import CostSource, Usage
 
 from .cachekey import canonical_json
 
+CHARS_PER_TOKEN = 2.3
+
 
 def estimate_tokens(body: dict[str, Any]) -> int:
     """Rough token estimate for a request body, used only when a real count isn't available.
 
-    No provider documents its tokenizer (see providers.yaml `todo`), so this uses the common
-    rule-of-thumb approximation of ~4 characters per token over the canonical JSON body.
+    No provider documents its tokenizer (see providers.yaml `todo`). Calibrated on 114 real
+    calls via Vercel AI Gateway (2026-09-24): 2.3 characters of canonical JSON per reported
+    input token (JSON punctuation and short keys tokenize densely; the usual ~4 undercounts ~1.7x).
     """
-    return math.ceil(len(canonical_json(body)) / 4)
+    return math.ceil(len(canonical_json(body)) / CHARS_PER_TOKEN)
 
 
 def computed_cost_usd(input_tokens: int, price_per_mtok_usd: float | None) -> float:

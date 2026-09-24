@@ -60,8 +60,10 @@ vercel:
   wire: systemone                    # alternative: wire vercel_evaluate -> path /v1/evaluate
   api_key_env: AI_GATEWAY_API_KEY
   default_model: typesafe-ai/jev
-  rpm_limit: 1200                    # TODO: paid tier has no gateway limit; upstream TypeSafe limits assumed
-  tps_limit: 250000
+  rpm_limit: 30                      # OBSERVED 2026-09-24: x-ratelimit-limit-requests: 30 (free credits,
+  #                                    429 "upstream provider is currently experiencing high demand").
+  #                                    The adapter also adopts x-ratelimit-* headers at runtime.
+  tps_limit: 250000                  # x-ratelimit-limit-tokens: 250000 (observed)
   max_context_tokens: 32000          # TODO: not documented for the gateway; conservative
   max_state_plus_question_tokens: null
   price_per_mtok_usd: 0.042          # fallback only; response carries providerMetadata.gateway.cost

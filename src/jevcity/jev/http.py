@@ -72,6 +72,29 @@ def _parse_retry_after(headers: httpx.Headers) -> float | None:
     return max((dt.timestamp() - time.time()), 0.0)
 
 
+def _float_header(headers: httpx.Headers, name: str) -> float | None:
+    raw = headers.get(name)
+    try:
+        return float(raw) if raw is not None else None
+    except ValueError:
+        return None
+
+
+def _duration_header(raw: str | None) -> float | None:
+    """'32s', '1m30s', '250ms' or plain seconds -> seconds."""
+    if not raw:
+        return None
+    import re
+
+    total = 0.0
+    matched = False
+    for value, unit in re.findall(r"([0-9.]+)(ms|s|m|h)?", raw.strip()):
+        matched = True
+        v = float(value)
+        total += {"ms": v / 1000, "s": v, "m": v * 60, "h": v * 3600, "": v}[unit]
+    return total if matched else None
+
+
 def _backoff_delay(attempt: int, rng: random.Random) -> float:
     """Exponential backoff: 0.5s * 2^n, capped at 16s, with up to 25% jitter subtracted."""
     base = min(_BACKOFF_INITIAL * (_BACKOFF_MULTIPLIER**attempt), _BACKOFF_CAP)
@@ -149,43 +172,64 @@ class HttpBackend:
         attempts = 0
         last_error: BaseException | None = None
 
-        async with self._limiter.acquire(est_tokens):
-            while attempts <= self._cfg.max_retries:
-                attempts += 1
-                try:
+        # One limiter slot per attempt: a retry is a new request and must respect the limits.
+        while attempts <= self._cfg.max_retries:
+            attempts += 1
+            try:
+                async with self._limiter.acquire(est_tokens):
                     resp = await self._client.post(self.settings.path, json=wire_body)
-                except (httpx.ConnectError, httpx.TimeoutException) as exc:
-                    last_error = exc
-                    if attempts > self._cfg.max_retries:
-                        break
-                    await self._sleep(_backoff_delay(attempts - 1, self._rng))
-                    continue
-
-                if resp.status_code == 200:
-                    self._limiter.note_success()
-                    return self._handle_success(req, resp, body, wire_body, key, t0, attempts)
-
-                self._handle_error_status(resp)  # raises for non-retryable statuses
-
-                # retryable status: 408 / 429 / 5xx
-                usage = Usage(requests=0, rate_limited=1 if resp.status_code == 429 else 0)
-                self._meter.record(usage)
-                retry_after = _parse_retry_after(resp.headers)
-                if resp.status_code == 429:
-                    self._limiter.note_rate_limited()
-                    if retry_after is not None:
-                        await self._limiter.pause_for(retry_after)
-                last_error = JevError(
-                    f"{self.provider}: HTTP {resp.status_code}: "
-                    f"{codecs.parse_error_message(resp.status_code, _safe_json(resp))}"
-                )
+            except (httpx.ConnectError, httpx.TimeoutException) as exc:
+                last_error = exc
                 if attempts > self._cfg.max_retries:
                     break
-                delay = retry_after if retry_after is not None else _backoff_delay(attempts - 1, self._rng)
-                await self._sleep(delay)
+                await self._sleep(_backoff_delay(attempts - 1, self._rng))
+                continue
+
+            self._observe_rate_headers(resp.headers)
+
+            if resp.status_code == 200:
+                self._limiter.note_success()
+                return self._handle_success(req, resp, body, wire_body, key, t0, attempts)
+
+            self._handle_error_status(resp)  # raises for non-retryable statuses
+
+            # retryable status: 408 / 429 / 5xx
+            usage = Usage(requests=0, rate_limited=1 if resp.status_code == 429 else 0)
+            self._meter.record(usage)
+            retry_after = _parse_retry_after(resp.headers)
+            if resp.status_code == 429:
+                self._limiter.note_rate_limited()
+                if retry_after is not None:
+                    await self._limiter.pause_for(retry_after)
+            last_error = JevError(
+                f"{self.provider}: HTTP {resp.status_code}: "
+                f"{codecs.parse_error_message(resp.status_code, _safe_json(resp))}"
+            )
+            if attempts > self._cfg.max_retries:
+                break
+            delay = retry_after if retry_after is not None else _backoff_delay(attempts - 1, self._rng)
+            await self._sleep(delay)
 
         self._meter.record(Usage(requests=0, errors=1))
         raise JevRetryExhausted(attempts, last_error or JevError("unknown error"))
+
+    def _observe_rate_headers(self, headers: httpx.Headers) -> None:
+        """OpenAI-style `x-ratelimit-*` headers (sent by Vercel AI Gateway; not documented by
+        TypeSafe or OpenRouter). Absent headers change nothing."""
+        limit = _float_header(headers, "x-ratelimit-limit-requests")
+        remaining = _float_header(headers, "x-ratelimit-remaining-requests")
+        reset = _duration_header(headers.get("x-ratelimit-reset-requests"))
+        if limit is None and remaining is None:
+            return
+        before = self._limiter.current_rpm
+        self._limiter.apply_server_limits(
+            limit, int(remaining) if remaining is not None else None, reset, self._cfg.rate_safety
+        )
+        after = self._limiter.current_rpm
+        if before != after:
+            logger.warning(
+                "%s advertises %s requests/min; limiting to %.1f req/min", self.provider, limit, after
+            )
 
     def _handle_error_status(self, resp: httpx.Response) -> None:
         status = resp.status_code
