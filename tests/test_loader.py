@@ -166,3 +166,61 @@ def test_entry_not_an_object_raises_value_error(tmp_path: Path) -> None:
     f = _write(tmp_path, ["not an object"])
     with pytest.raises(ValueError):
         load_profiles(f)
+
+
+# --- Optional realism fields -------------------------------------------------------------
+
+
+def test_optional_realism_fields_default_to_none(tmp_path: Path) -> None:
+    f = _write(tmp_path, [_good_row()])
+    profiles = load_profiles(f)
+    p = profiles[0]
+    assert p.income_per_household_annual is None
+    assert p.owner_share is None
+    assert p.avg_household_size is None
+
+
+def test_optional_realism_fields_load_when_set_with_source(tmp_path: Path) -> None:
+    row = _good_row()
+    row["income_per_household_annual"] = 45_000.0
+    row["owner_share"] = 0.55
+    row["avg_household_size"] = 2.4
+    row["sources"]["income_per_household_annual"] = Source.OPENDATA.value
+    row["sources"]["owner_share"] = Source.OPENDATA.value
+    row["sources"]["avg_household_size"] = Source.OPENDATA.value
+    f = _write(tmp_path, [row])
+    profiles = load_profiles(f)
+    p = profiles[0]
+    assert p.income_per_household_annual == 45_000.0
+    assert p.owner_share == 0.55
+    assert p.avg_household_size == 2.4
+
+
+def test_optional_field_set_without_source_raises_value_error(tmp_path: Path) -> None:
+    row = _good_row()
+    row["owner_share"] = 0.55  # no matching sources["owner_share"] entry
+    f = _write(tmp_path, [row])
+    with pytest.raises(ValueError, match="owner_share is set but has no sources entry"):
+        load_profiles(f)
+
+
+@pytest.mark.parametrize(
+    ("field", "bad_value"),
+    [
+        ("owner_share", 1.5),
+        ("owner_share", -0.1),
+        ("avg_household_size", 0.5),
+        ("avg_household_size", 10.0),
+        ("income_per_household_annual", 1_000.0),
+        ("income_per_household_annual", 1_000_000.0),
+    ],
+)
+def test_optional_field_out_of_range_raises_value_error(
+    tmp_path: Path, field: str, bad_value: float
+) -> None:
+    row = _good_row()
+    row[field] = bad_value
+    row["sources"][field] = Source.OPENDATA.value
+    f = _write(tmp_path, [row])
+    with pytest.raises(ValueError, match="outside sane range"):
+        load_profiles(f)

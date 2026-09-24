@@ -10,9 +10,10 @@ from __future__ import annotations
 
 import math
 
-from jevcity.types import Agent, Occupation, World
+from jevcity.types import Agent, Occupation, Tenure, World
 
 TICKS_PER_MONTH = 30
+MORTGAGE_AGE_CUTOFF = 55  # kept in sync with population/generator.py's constant of the same name
 
 
 # --- rent burden -----------------------------------------------------------------------------
@@ -31,6 +32,40 @@ def burden_label(burden: float) -> str:
 def rent_burden_text(burden: float) -> str:
     pct = round(min(burden, 9.99) * 100)
     return f"{burden_label(burden)}: rent takes {pct}% of income"
+
+
+def housing_cost_text(agent: Agent) -> str:
+    """Like rent_burden_text, but words it as "housing cost" for owners (their rent_monthly
+    is a mortgage/fees payment, not rent) and "rent" for renters."""
+    pct = round(min(agent.rent_burden, 9.99) * 100)
+    label = burden_label(agent.rent_burden)
+    if agent.tenure is Tenure.OWNER:
+        return f"{label}: housing cost takes {pct}% of income"
+    return f"{label}: rent takes {pct}% of income"
+
+
+# --- tenure ------------------------------------------------------------------------------
+
+
+def tenure_text(agent: Agent) -> str:
+    """Plain statement of housing tenure for the person state block.
+
+    Owners' mortgage-vs-outright split isn't stored on Agent (only Tenure is); this infers
+    it from age using the same MORTGAGE_AGE_CUTOFF the generator uses to decide it, which is
+    an approximation but consistent with how the housing cost itself was generated.
+    """
+    if agent.tenure is Tenure.RENTER:
+        return "rents their home"
+    if agent.age < MORTGAGE_AGE_CUTOFF:
+        return "owns their home (mortgage)"
+    return "owns their home outright"
+
+
+def housing_text(agent: Agent) -> str:
+    """One compact `person.rent_burden`-field sentence combining tenure_text and
+    housing_cost_text (a separate "housing" key would push some K=1 states over the
+    ~300-token budget; see state_builder.py's module docstring)."""
+    return f"{tenure_text(agent)}; {housing_cost_text(agent)}"
 
 
 # --- affordability of a (possibly different) district's new-lease rent ---------------------
@@ -82,7 +117,7 @@ def savings_label(months: float) -> str:
 def savings_text(savings: float, monthly_expenses: float) -> str:
     months = savings_months(savings, monthly_expenses)
     months_r = round(min(months, 99.0), 1)
-    return f"{savings_label(months)}: {months_r} months of expenses saved"
+    return f"{savings_label(months)}: {months_r}mo saved"
 
 
 # --- rent trend --------------------------------------------------------------------------

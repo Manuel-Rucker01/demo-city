@@ -8,7 +8,8 @@ plain loop over the (typically small) set of triggered agents.
 - LEASE_RENEWAL: deterministic (lease_length_ticks cadence). new_rent computed and applied
   here; see world/market.py module docstring for the exact formula (the same one, since a
   renewal is really a market event) - duplicated in miniature below to avoid a cross-import
-  cycle between events/ and world/.
+  cycle between events/ and world/. Owners never fire LEASE_RENEWAL: their housing cost
+  (mortgage/fees) is fixed and unaffected by market rent or rent caps (see Agent.tenure).
 - JOB_LOSS: employed, working-age agents, w.p. job_loss_daily_prob.
 - JOB_OFFER: unemployed, working-age agents, w.p. job_offer_daily_prob * availability, where
   availability = min(1, vacancies_in_offer_district / JOB_OFFER_VACANCY_SCALE). The offer
@@ -25,7 +26,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from jevcity.types import Agent, Event, EventKind, EventParams, World
+from jevcity.types import Agent, Event, EventKind, EventParams, Tenure, World
 from jevcity.world._helpers import clip, is_working_age
 
 JOB_OFFER_VACANCY_SCALE = 10.0
@@ -71,7 +72,11 @@ def detect_events(
         if payday_mask[idx]:
             events.append(Event(agent_id=aid, kind=EventKind.PAYDAY))
 
-        if tick > agent.lease_start_tick and (tick - agent.lease_start_tick) % params.lease_length_ticks == 0:
+        if (
+            agent.tenure is not Tenure.OWNER
+            and tick > agent.lease_start_tick
+            and (tick - agent.lease_start_tick) % params.lease_length_ticks == 0
+        ):
             state = world.states.get(agent.home)
             if state is not None:
                 cap = state.max_increase_pct if state.max_increase_pct is not None else RENEWAL_INCREASE_CAP_DEFAULT

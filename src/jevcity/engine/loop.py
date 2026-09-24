@@ -138,6 +138,7 @@ async def run_simulation(
             wage_monthly=a.wage_monthly,
             rent_monthly=a.rent_monthly,
             satisfaction=a.satisfaction,
+            tenure=a.tenure,
         )
         for a in agents_list
     ]

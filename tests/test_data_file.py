@@ -125,3 +125,33 @@ def test_sources_md_exists_and_mentions_every_district():
     text = sources_md.read_text(encoding="utf-8")
     assert "opendata" in text.lower()
     assert "plausible" in text.lower()
+
+
+def test_optional_realism_fields_present_and_in_sane_range(profiles):
+    for p in profiles:
+        assert p.income_per_household_annual is not None, p.id
+        assert p.owner_share is not None, p.id
+        assert p.avg_household_size is not None, p.id
+        assert 10_000 <= p.income_per_household_annual <= 150_000, (
+            f"{p.id}: income_per_household_annual={p.income_per_household_annual}"
+        )
+        assert 0.0 <= p.owner_share <= 1.0, f"{p.id}: owner_share={p.owner_share}"
+        assert 1.5 <= p.avg_household_size <= 4.0, (
+            f"{p.id}: avg_household_size={p.avg_household_size}"
+        )
+
+
+def test_optional_realism_fields_have_sources(profiles):
+    valid = {s.value for s in Source}
+    for p in profiles:
+        for field in ("income_per_household_annual", "owner_share", "avg_household_size"):
+            assert field in p.sources, f"{p.id}: no source for {field}"
+            assert p.sources[field] in valid, f"{p.id}.{field}: unknown source {p.sources[field]!r}"
+
+
+def test_avg_rent_and_transit_score_are_real_data(profiles):
+    # avg_rent_monthly and transit_score used to be Source.PLAUSIBLE; this pins the upgrade
+    # to real/derived data so a future regression (e.g. reverting to hand-set defaults) fails.
+    for p in profiles:
+        assert p.sources["avg_rent_monthly"] == Source.OPENDATA, p.id
+        assert p.sources["transit_score"] == Source.DERIVED, p.id

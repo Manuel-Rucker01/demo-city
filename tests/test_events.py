@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from jevcity.events.triggers import detect_events
-from jevcity.types import Agent, EventKind, EventParams, Occupation, Scenario
+from jevcity.types import Agent, EventKind, EventParams, Occupation, Scenario, Tenure
 from jevcity.world.market import daily_update, init_world
 
 
@@ -34,6 +34,7 @@ def make_agent(
     satisfaction=0.6,
     days_unemployed=0,
     last_move_tick=None,
+    tenure=Tenure.RENTER,
 ) -> Agent:
     if employed and job_district is None:
         job_district = home
@@ -55,6 +56,7 @@ def make_agent(
         satisfaction=satisfaction,
         days_unemployed=days_unemployed,
         last_move_tick=last_move_tick,
+        tenure=tenure,
     )
 
 
@@ -128,6 +130,19 @@ def test_lease_renewal_never_decreases_rent(profiles):
     params = EventParams()
     detect_events(world, agents_dict, tick=params.lease_length_ticks, params=params, rng=rng)
     assert agent.rent_monthly >= 2000.0 - 1e-6
+
+
+def test_owners_never_get_lease_renewal(profiles):
+    rng = np.random.default_rng(3)
+    agent = make_agent(
+        0, profiles[0].id, tenure=Tenure.OWNER, rent_monthly=200.0, lease_start_tick=0,
+    )
+    world = init_world(profiles, [agent])
+    agents_dict = {0: agent}
+    params = EventParams()
+    events = detect_events(world, agents_dict, tick=params.lease_length_ticks, params=params, rng=rng)
+    assert not any(e.kind == EventKind.LEASE_RENEWAL for e in events)
+    assert agent.rent_monthly == 200.0  # housing cost untouched
 
 
 # --- job loss / job offer ----------------------------------------------------------------

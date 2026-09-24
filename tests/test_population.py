@@ -7,8 +7,13 @@ import time
 
 import numpy as np
 
-from jevcity.population.generator import _largest_remainder, generate_population
-from jevcity.types import Occupation
+from jevcity.population.generator import (
+    DEFAULT_AVG_HOUSEHOLD_SIZE,
+    DEFAULT_OWNER_SHARE,
+    _largest_remainder,
+    generate_population,
+)
+from jevcity.types import Occupation, Tenure
 
 N_SMALL = 1_000
 N_LARGE = 10_000
@@ -107,13 +112,98 @@ def test_employment_rate_per_district_within_tolerance(profiles):
 
 
 def test_median_rent_per_district_within_15pct(profiles):
+    # Renters only: avg_rent_monthly is the district's typical *rental* flat price, and
+    # owners' rent_monthly holds an unrelated housing cost (mortgage/fees).
     rng = np.random.default_rng(42)
     agents = generate_population(profiles, N_LARGE, rng)
     for p in profiles:
-        rents = sorted(a.rent_monthly for a in agents if a.home == p.id)
+        rents = sorted(
+            a.rent_monthly for a in agents if a.home == p.id and a.tenure is Tenure.RENTER
+        )
         assert rents
         median = rents[len(rents) // 2]
         assert abs(median - p.avg_rent_monthly) / p.avg_rent_monthly < 0.15
+
+
+# --- stratified allocation: exact quotas -------------------------------------------------
+
+
+def test_exact_unemployment_quota_per_district_small_n(profiles):
+    rng = np.random.default_rng(3)
+    n = 250
+    agents = generate_population(profiles, n, rng)
+    by_district: dict[str, list] = {p.id: [] for p in profiles}
+    for a in agents:
+        by_district[a.home].append(a)
+    for p in profiles:
+        cohort = by_district[p.id]
+        eligible = [a for a in cohort if a.occupation not in (Occupation.STUDENT, Occupation.RETIRED)]
+        if not eligible:
+            continue
+        unemployed = sum(1 for a in eligible if not a.employed)
+        expected = round(p.unemployment_rate * len(eligible))
+        assert unemployed == expected
+
+
+def test_exact_owner_quota_per_district(profiles):
+    rng = np.random.default_rng(9)
+    n = 250
+    agents = generate_population(profiles, n, rng)
+    by_district: dict[str, list] = {p.id: [] for p in profiles}
+    for a in agents:
+        by_district[a.home].append(a)
+    for p in profiles:
+        cohort = by_district[p.id]
+        owners = sum(1 for a in cohort if a.tenure is Tenure.OWNER)
+        owner_share = p.owner_share if p.owner_share is not None else DEFAULT_OWNER_SHARE
+        expected = round(owner_share * len(cohort))
+        assert owners == expected
+
+
+def test_owners_skew_older(profiles):
+    rng = np.random.default_rng(11)
+    agents = generate_population(profiles, N_LARGE, rng)
+    owner_ages = [a.age for a in agents if a.tenure is Tenure.OWNER]
+    renter_ages = [a.age for a in agents if a.tenure is Tenure.RENTER]
+    assert owner_ages and renter_ages
+    assert sum(owner_ages) / len(owner_ages) > sum(renter_ages) / len(renter_ages)
+
+
+def test_owner_housing_cost_far_below_market_rent(profiles):
+    rng = np.random.default_rng(13)
+    agents = generate_population(profiles, N_LARGE, rng)
+    by_district = {p.id: p for p in profiles}
+    for a in agents:
+        if a.tenure is Tenure.OWNER:
+            assert a.rent_monthly < by_district[a.home].avg_rent_monthly
+
+
+def test_household_size_mean_matches_avg_household_size(profiles):
+    rng = np.random.default_rng(21)
+    agents = generate_population(profiles, N_LARGE, rng)
+    by_district: dict[str, list] = {p.id: [] for p in profiles}
+    for a in agents:
+        by_district[a.home].append(a)
+    for p in profiles:
+        cohort = by_district[p.id]
+        target = p.avg_household_size or DEFAULT_AVG_HOUSEHOLD_SIZE
+        mean_size = sum(a.household_size for a in cohort) / len(cohort)
+        assert abs(mean_size - target) < 0.3
+
+
+def test_median_renter_burden_within_target_range(profiles):
+    """Median renter rent burden per district should land in a plausible 25-45% band."""
+    rng = np.random.default_rng(31)
+    agents = generate_population(profiles, N_LARGE, rng)
+    by_district: dict[str, list] = {p.id: [] for p in profiles}
+    for a in agents:
+        by_district[a.home].append(a)
+    for p in profiles:
+        renters = [a for a in by_district[p.id] if a.tenure is Tenure.RENTER]
+        burdens = sorted(a.rent_burden for a in renters)
+        assert burdens
+        median = burdens[len(burdens) // 2]
+        assert 0.25 <= median <= 0.45, f"{p.id}: median renter burden {median:.3f}"
 
 
 def test_performance_10000_agents_under_1s(profiles):

@@ -11,12 +11,12 @@
       "65+": 0.1138
     },
     "income_per_capita_annual": 19552.83,
-    "avg_rent_monthly": 1050.0,
+    "avg_rent_monthly": 1018.85,
     "vacancy_rate": 0.06,
-    "unemployment_rate": 0.11,
+    "unemployment_rate": 0.09,
     "jobs_per_resident": 1.1,
     "shops": 6624,
-    "transit_score": 0.95,
+    "transit_score": 0.4053,
     "centroid": [
       2.18073,
       41.38113
@@ -25,24 +25,33 @@
       "population": "opendata",
       "age_distribution": "derived",
       "income_per_capita_annual": "opendata",
-      "avg_rent_monthly": "plausible",
+      "avg_rent_monthly": "opendata",
       "vacancy_rate": "plausible",
       "unemployment_rate": "plausible",
       "jobs_per_resident": "plausible",
       "shops": "opendata",
-      "transit_score": "plausible"
+      "transit_score": "derived",
+      "income_per_household_annual": "opendata",
+      "owner_share": "opendata",
+      "avg_household_size": "opendata"
     },
     "refs": {
       "population": "pad_mdbas_edat-q (2025)",
       "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
       "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
-      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
-      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
-      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "avg_rent_monthly": "Secretaria de l'Habitatge (Generalitat de Catalunya) / INCASO, mitjana anual del lloguer mitja contractual, 2025 (prev. year 2024: 1063.55 EUR/month); https://habitatge.gencat.cat/web/.content/home/dades/estadistiques/01_Estadistiques_de_construccio_i_mercat_immobiliari/03_Mercat_de_lloguer/03_Lloguers_Barcelona_per_districtes_i_barris/anual_bcn_lloguer.xlsx",
+      "vacancy_rate": "plausible: no district-level rental-market vacancy dataset found (INE census 'viviendas vacias' is a different, stock-based definition and was not found broken out by BCN district either)",
+      "unemployment_rate": "plausible, recalibrated to the city-wide registered-unemployment rate reported by the Ajuntament for 2025 (5.6% of pop. 16-64, March 2025; 7.67% 'taxa d'atur', May 2025, per beteve.cat) with the known relative district ranking; no machine-readable district-level series found (only PDF bulletins and a JS-rendered dashboard on portaldades.ajuntament.barcelona.cat) - see SOURCES.md",
       "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
       "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
-      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
-    }
+      "transit_score": "derived from transports (2025): weighted count of transit-equipment points ['Ferrocarrils Generalitat (FGC)', 'Metro i línies urbanes FGC', 'RENFE', 'Tramvia', \"Tren a l'aeroport\"] per km^2 of district area (area from 20170706-districtes-barris), normalized to the densest district = 1.0",
+      "income_per_household_annual": "atles-renda-bruta-per-llar (2023), gross (not disposable) taxable income per household, household-weighted mean of census-section values (weights from pad_dom_mdbas_n-persones 2025)",
+      "owner_share": "habit-ppal-segons-regim-tin (2011), share of main dwellings owned outright, with a mortgage, or by inheritance/donation (rented + ceded-free/cheap + other = non-owner); barri rows summed to district. Most recent district-resolution tenure table found - see SOURCES.md for why the 2021 census and 2017 Enquesta Sociodemografica were not usable here.",
+      "avg_household_size": "pad_dom_mdbas_n-persones (2025), mean of N_PERSONES_AGG (household-size band, capped at 9=9+) weighted by household counts, by census section"
+    },
+    "income_per_household_annual": 42289.21,
+    "owner_share": 0.3869,
+    "avg_household_size": 2.436
   },
   {
     "id": "eixample",
@@ -56,12 +65,12 @@
       "65+": 0.2174
     },
     "income_per_capita_annual": 29495.12,
-    "avg_rent_monthly": 1250.0,
+    "avg_rent_monthly": 1283.96,
     "vacancy_rate": 0.04,
-    "unemployment_rate": 0.07,
+    "unemployment_rate": 0.05,
     "jobs_per_resident": 1.4,
     "shops": 13559,
-    "transit_score": 0.95,
+    "transit_score": 1.0,
     "centroid": [
       2.16447,
       41.39159
@@ -70,24 +79,33 @@
       "population": "opendata",
       "age_distribution": "derived",
       "income_per_capita_annual": "opendata",
-      "avg_rent_monthly": "plausible",
+      "avg_rent_monthly": "opendata",
       "vacancy_rate": "plausible",
       "unemployment_rate": "plausible",
       "jobs_per_resident": "plausible",
       "shops": "opendata",
-      "transit_score": "plausible"
+      "transit_score": "derived",
+      "income_per_household_annual": "opendata",
+      "owner_share": "opendata",
+      "avg_household_size": "opendata"
     },
     "refs": {
       "population": "pad_mdbas_edat-q (2025)",
       "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
       "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
-      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
-      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
-      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "avg_rent_monthly": "Secretaria de l'Habitatge (Generalitat de Catalunya) / INCASO, mitjana anual del lloguer mitja contractual, 2025 (prev. year 2024: 1285.42 EUR/month); https://habitatge.gencat.cat/web/.content/home/dades/estadistiques/01_Estadistiques_de_construccio_i_mercat_immobiliari/03_Mercat_de_lloguer/03_Lloguers_Barcelona_per_districtes_i_barris/anual_bcn_lloguer.xlsx",
+      "vacancy_rate": "plausible: no district-level rental-market vacancy dataset found (INE census 'viviendas vacias' is a different, stock-based definition and was not found broken out by BCN district either)",
+      "unemployment_rate": "plausible, recalibrated to the city-wide registered-unemployment rate reported by the Ajuntament for 2025 (5.6% of pop. 16-64, March 2025; 7.67% 'taxa d'atur', May 2025, per beteve.cat) with the known relative district ranking; no machine-readable district-level series found (only PDF bulletins and a JS-rendered dashboard on portaldades.ajuntament.barcelona.cat) - see SOURCES.md",
       "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
       "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
-      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
-    }
+      "transit_score": "derived from transports (2025): weighted count of transit-equipment points ['Ferrocarrils Generalitat (FGC)', 'Metro i línies urbanes FGC', 'RENFE', 'Tramvia', \"Tren a l'aeroport\"] per km^2 of district area (area from 20170706-districtes-barris), normalized to the densest district = 1.0",
+      "income_per_household_annual": "atles-renda-bruta-per-llar (2023), gross (not disposable) taxable income per household, household-weighted mean of census-section values (weights from pad_dom_mdbas_n-persones 2025)",
+      "owner_share": "habit-ppal-segons-regim-tin (2011), share of main dwellings owned outright, with a mortgage, or by inheritance/donation (rented + ceded-free/cheap + other = non-owner); barri rows summed to district. Most recent district-resolution tenure table found - see SOURCES.md for why the 2021 census and 2017 Enquesta Sociodemografica were not usable here.",
+      "avg_household_size": "pad_dom_mdbas_n-persones (2025), mean of N_PERSONES_AGG (household-size band, capped at 9=9+) weighted by household counts, by census section"
+    },
+    "income_per_household_annual": 68643.82,
+    "owner_share": 0.57,
+    "avg_household_size": 2.361
   },
   {
     "id": "gracia",
@@ -101,12 +119,12 @@
       "65+": 0.2115
     },
     "income_per_capita_annual": 28522.94,
-    "avg_rent_monthly": 1150.0,
+    "avg_rent_monthly": 1082.33,
     "vacancy_rate": 0.03,
-    "unemployment_rate": 0.07,
+    "unemployment_rate": 0.05,
     "jobs_per_resident": 0.55,
     "shops": 5529,
-    "transit_score": 0.8,
+    "transit_score": 0.2743,
     "centroid": [
       2.15223,
       41.41026
@@ -115,24 +133,33 @@
       "population": "opendata",
       "age_distribution": "derived",
       "income_per_capita_annual": "opendata",
-      "avg_rent_monthly": "plausible",
+      "avg_rent_monthly": "opendata",
       "vacancy_rate": "plausible",
       "unemployment_rate": "plausible",
       "jobs_per_resident": "plausible",
       "shops": "opendata",
-      "transit_score": "plausible"
+      "transit_score": "derived",
+      "income_per_household_annual": "opendata",
+      "owner_share": "opendata",
+      "avg_household_size": "opendata"
     },
     "refs": {
       "population": "pad_mdbas_edat-q (2025)",
       "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
       "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
-      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
-      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
-      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "avg_rent_monthly": "Secretaria de l'Habitatge (Generalitat de Catalunya) / INCASO, mitjana anual del lloguer mitja contractual, 2025 (prev. year 2024: 1151.01 EUR/month); https://habitatge.gencat.cat/web/.content/home/dades/estadistiques/01_Estadistiques_de_construccio_i_mercat_immobiliari/03_Mercat_de_lloguer/03_Lloguers_Barcelona_per_districtes_i_barris/anual_bcn_lloguer.xlsx",
+      "vacancy_rate": "plausible: no district-level rental-market vacancy dataset found (INE census 'viviendas vacias' is a different, stock-based definition and was not found broken out by BCN district either)",
+      "unemployment_rate": "plausible, recalibrated to the city-wide registered-unemployment rate reported by the Ajuntament for 2025 (5.6% of pop. 16-64, March 2025; 7.67% 'taxa d'atur', May 2025, per beteve.cat) with the known relative district ranking; no machine-readable district-level series found (only PDF bulletins and a JS-rendered dashboard on portaldades.ajuntament.barcelona.cat) - see SOURCES.md",
       "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
       "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
-      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
-    }
+      "transit_score": "derived from transports (2025): weighted count of transit-equipment points ['Ferrocarrils Generalitat (FGC)', 'Metro i línies urbanes FGC', 'RENFE', 'Tramvia', \"Tren a l'aeroport\"] per km^2 of district area (area from 20170706-districtes-barris), normalized to the densest district = 1.0",
+      "income_per_household_annual": "atles-renda-bruta-per-llar (2023), gross (not disposable) taxable income per household, household-weighted mean of census-section values (weights from pad_dom_mdbas_n-persones 2025)",
+      "owner_share": "habit-ppal-segons-regim-tin (2011), share of main dwellings owned outright, with a mortgage, or by inheritance/donation (rented + ceded-free/cheap + other = non-owner); barri rows summed to district. Most recent district-resolution tenure table found - see SOURCES.md for why the 2021 census and 2017 Enquesta Sociodemografica were not usable here.",
+      "avg_household_size": "pad_dom_mdbas_n-persones (2025), mean of N_PERSONES_AGG (household-size band, capped at 9=9+) weighted by household counts, by census section"
+    },
+    "income_per_household_annual": 63074.59,
+    "owner_share": 0.5647,
+    "avg_household_size": 2.286
   },
   {
     "id": "nou_barris",
@@ -146,12 +173,12 @@
       "65+": 0.2106
     },
     "income_per_capita_annual": 18643.25,
-    "avg_rent_monthly": 800.0,
+    "avg_rent_monthly": 796.21,
     "vacancy_rate": 0.05,
-    "unemployment_rate": 0.12,
+    "unemployment_rate": 0.1,
     "jobs_per_resident": 0.3,
     "shops": 4398,
-    "transit_score": 0.6,
+    "transit_score": 0.3469,
     "centroid": [
       2.17507,
       41.44631
@@ -160,24 +187,33 @@
       "population": "opendata",
       "age_distribution": "derived",
       "income_per_capita_annual": "opendata",
-      "avg_rent_monthly": "plausible",
+      "avg_rent_monthly": "opendata",
       "vacancy_rate": "plausible",
       "unemployment_rate": "plausible",
       "jobs_per_resident": "plausible",
       "shops": "opendata",
-      "transit_score": "plausible"
+      "transit_score": "derived",
+      "income_per_household_annual": "opendata",
+      "owner_share": "opendata",
+      "avg_household_size": "opendata"
     },
     "refs": {
       "population": "pad_mdbas_edat-q (2025)",
       "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
       "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
-      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
-      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
-      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "avg_rent_monthly": "Secretaria de l'Habitatge (Generalitat de Catalunya) / INCASO, mitjana anual del lloguer mitja contractual, 2025 (prev. year 2024: 796.22 EUR/month); https://habitatge.gencat.cat/web/.content/home/dades/estadistiques/01_Estadistiques_de_construccio_i_mercat_immobiliari/03_Mercat_de_lloguer/03_Lloguers_Barcelona_per_districtes_i_barris/anual_bcn_lloguer.xlsx",
+      "vacancy_rate": "plausible: no district-level rental-market vacancy dataset found (INE census 'viviendas vacias' is a different, stock-based definition and was not found broken out by BCN district either)",
+      "unemployment_rate": "plausible, recalibrated to the city-wide registered-unemployment rate reported by the Ajuntament for 2025 (5.6% of pop. 16-64, March 2025; 7.67% 'taxa d'atur', May 2025, per beteve.cat) with the known relative district ranking; no machine-readable district-level series found (only PDF bulletins and a JS-rendered dashboard on portaldades.ajuntament.barcelona.cat) - see SOURCES.md",
       "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
       "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
-      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
-    }
+      "transit_score": "derived from transports (2025): weighted count of transit-equipment points ['Ferrocarrils Generalitat (FGC)', 'Metro i línies urbanes FGC', 'RENFE', 'Tramvia', \"Tren a l'aeroport\"] per km^2 of district area (area from 20170706-districtes-barris), normalized to the densest district = 1.0",
+      "income_per_household_annual": "atles-renda-bruta-per-llar (2023), gross (not disposable) taxable income per household, household-weighted mean of census-section values (weights from pad_dom_mdbas_n-persones 2025)",
+      "owner_share": "habit-ppal-segons-regim-tin (2011), share of main dwellings owned outright, with a mortgage, or by inheritance/donation (rented + ceded-free/cheap + other = non-owner); barri rows summed to district. Most recent district-resolution tenure table found - see SOURCES.md for why the 2021 census and 2017 Enquesta Sociodemografica were not usable here.",
+      "avg_household_size": "pad_dom_mdbas_n-persones (2025), mean of N_PERSONES_AGG (household-size band, capped at 9=9+) weighted by household counts, by census section"
+    },
+    "income_per_household_annual": 41965.6,
+    "owner_share": 0.7446,
+    "avg_household_size": 2.556
   },
   {
     "id": "sant_marti",
@@ -191,12 +227,12 @@
       "65+": 0.2042
     },
     "income_per_capita_annual": 23815.01,
-    "avg_rent_monthly": 1100.0,
+    "avg_rent_monthly": 1094.0,
     "vacancy_rate": 0.04,
-    "unemployment_rate": 0.09,
+    "unemployment_rate": 0.07,
     "jobs_per_resident": 0.75,
     "shops": 7835,
-    "transit_score": 0.8,
+    "transit_score": 0.3984,
     "centroid": [
       2.20104,
       41.40763
@@ -205,23 +241,32 @@
       "population": "opendata",
       "age_distribution": "derived",
       "income_per_capita_annual": "opendata",
-      "avg_rent_monthly": "plausible",
+      "avg_rent_monthly": "opendata",
       "vacancy_rate": "plausible",
       "unemployment_rate": "plausible",
       "jobs_per_resident": "plausible",
       "shops": "opendata",
-      "transit_score": "plausible"
+      "transit_score": "derived",
+      "income_per_household_annual": "opendata",
+      "owner_share": "opendata",
+      "avg_household_size": "opendata"
     },
     "refs": {
       "population": "pad_mdbas_edat-q (2025)",
       "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
       "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
-      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
-      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
-      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "avg_rent_monthly": "Secretaria de l'Habitatge (Generalitat de Catalunya) / INCASO, mitjana anual del lloguer mitja contractual, 2025 (prev. year 2024: 1098.81 EUR/month); https://habitatge.gencat.cat/web/.content/home/dades/estadistiques/01_Estadistiques_de_construccio_i_mercat_immobiliari/03_Mercat_de_lloguer/03_Lloguers_Barcelona_per_districtes_i_barris/anual_bcn_lloguer.xlsx",
+      "vacancy_rate": "plausible: no district-level rental-market vacancy dataset found (INE census 'viviendas vacias' is a different, stock-based definition and was not found broken out by BCN district either)",
+      "unemployment_rate": "plausible, recalibrated to the city-wide registered-unemployment rate reported by the Ajuntament for 2025 (5.6% of pop. 16-64, March 2025; 7.67% 'taxa d'atur', May 2025, per beteve.cat) with the known relative district ranking; no machine-readable district-level series found (only PDF bulletins and a JS-rendered dashboard on portaldades.ajuntament.barcelona.cat) - see SOURCES.md",
       "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
       "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
-      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
-    }
+      "transit_score": "derived from transports (2025): weighted count of transit-equipment points ['Ferrocarrils Generalitat (FGC)', 'Metro i línies urbanes FGC', 'RENFE', 'Tramvia', \"Tren a l'aeroport\"] per km^2 of district area (area from 20170706-districtes-barris), normalized to the densest district = 1.0",
+      "income_per_household_annual": "atles-renda-bruta-per-llar (2023), gross (not disposable) taxable income per household, household-weighted mean of census-section values (weights from pad_dom_mdbas_n-persones 2025)",
+      "owner_share": "habit-ppal-segons-regim-tin (2011), share of main dwellings owned outright, with a mortgage, or by inheritance/donation (rented + ceded-free/cheap + other = non-owner); barri rows summed to district. Most recent district-resolution tenure table found - see SOURCES.md for why the 2021 census and 2017 Enquesta Sociodemografica were not usable here.",
+      "avg_household_size": "pad_dom_mdbas_n-persones (2025), mean of N_PERSONES_AGG (household-size band, capped at 9=9+) weighted by household counts, by census section"
+    },
+    "income_per_household_annual": 56408.7,
+    "owner_share": 0.725,
+    "avg_household_size": 2.476
   }
 ]

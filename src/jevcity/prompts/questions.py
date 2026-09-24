@@ -23,8 +23,11 @@ from jevcity.types import (
     Event,
     EventKind,
     Occupation,
+    Tenure,
     World,
 )
+
+OWNER_MOVE_PRIOR_FACTOR = 0.2  # owners are much less likely to move than renters
 
 ACTION_INSTRUCTIONS = (
     "What will this person most likely do today given their situation and today's events?"
@@ -180,6 +183,12 @@ def mock_priors_for_agent(
     months = savings_months(agent.savings, monthly_expenses(agent))
     if savings_label(months) in ("thin", "none"):
         action_w[Action.SAVE] += 3.0
+
+    if agent.tenure is Tenure.OWNER:
+        # Owners are much less likely to move (selling + buying/renting elsewhere is a
+        # bigger step than a renter simply not renewing a lease); never affected by lease
+        # renewals since they don't get LEASE_RENEWAL events in the first place.
+        action_w[Action.MOVE] *= OWNER_MOVE_PRIOR_FACTOR
 
     # --- destination ---
     dest_w = _destination_weights(agent, world)

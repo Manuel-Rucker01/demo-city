@@ -31,6 +31,7 @@ from jevcity.types import (
     MoveRecord,
     ProviderSettings,
     Scenario,
+    Tenure,
     TickDelta,
     Usage,
 )
@@ -91,10 +92,12 @@ class _Harness:
             SimpleNamespace(
                 id=1, age=30, occupation="mid_skill", home="d1", employed=True,
                 job_district="d1", wage_monthly=2000.0, rent_monthly=900.0, satisfaction=0.6,
+                tenure=Tenure.RENTER,
             ),
             SimpleNamespace(
                 id=2, age=40, occupation="mid_skill", home="d1", employed=True,
                 job_district="d1", wage_monthly=2200.0, rent_monthly=950.0, satisfaction=0.5,
+                tenure=Tenure.RENTER,
             ),
         ]
         world = SimpleNamespace(tick=0, states={"d1": None, "d2": None}, profiles={}, rent_history={})
