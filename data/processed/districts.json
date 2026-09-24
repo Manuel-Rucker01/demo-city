@@ -1,0 +1,227 @@
+[
+  {
+    "id": "ciutat_vella",
+    "name": "Ciutat Vella",
+    "population": 115326,
+    "age_distribution": {
+      "0-17": 0.1114,
+      "18-34": 0.3451,
+      "35-49": 0.2704,
+      "50-64": 0.1593,
+      "65+": 0.1138
+    },
+    "income_per_capita_annual": 19552.83,
+    "avg_rent_monthly": 1050.0,
+    "vacancy_rate": 0.06,
+    "unemployment_rate": 0.11,
+    "jobs_per_resident": 1.1,
+    "shops": 6624,
+    "transit_score": 0.95,
+    "centroid": [
+      2.18073,
+      41.38113
+    ],
+    "sources": {
+      "population": "opendata",
+      "age_distribution": "derived",
+      "income_per_capita_annual": "opendata",
+      "avg_rent_monthly": "plausible",
+      "vacancy_rate": "plausible",
+      "unemployment_rate": "plausible",
+      "jobs_per_resident": "plausible",
+      "shops": "opendata",
+      "transit_score": "plausible"
+    },
+    "refs": {
+      "population": "pad_mdbas_edat-q (2025)",
+      "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
+      "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
+      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
+      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
+      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
+      "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
+      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
+    }
+  },
+  {
+    "id": "eixample",
+    "name": "Eixample",
+    "population": 278268,
+    "age_distribution": {
+      "0-17": 0.1147,
+      "18-34": 0.2611,
+      "35-49": 0.2258,
+      "50-64": 0.181,
+      "65+": 0.2174
+    },
+    "income_per_capita_annual": 29495.12,
+    "avg_rent_monthly": 1250.0,
+    "vacancy_rate": 0.04,
+    "unemployment_rate": 0.07,
+    "jobs_per_resident": 1.4,
+    "shops": 13559,
+    "transit_score": 0.95,
+    "centroid": [
+      2.16447,
+      41.39159
+    ],
+    "sources": {
+      "population": "opendata",
+      "age_distribution": "derived",
+      "income_per_capita_annual": "opendata",
+      "avg_rent_monthly": "plausible",
+      "vacancy_rate": "plausible",
+      "unemployment_rate": "plausible",
+      "jobs_per_resident": "plausible",
+      "shops": "opendata",
+      "transit_score": "plausible"
+    },
+    "refs": {
+      "population": "pad_mdbas_edat-q (2025)",
+      "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
+      "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
+      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
+      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
+      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
+      "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
+      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
+    }
+  },
+  {
+    "id": "gracia",
+    "name": "Gràcia",
+    "population": 127642,
+    "age_distribution": {
+      "0-17": 0.1301,
+      "18-34": 0.2434,
+      "35-49": 0.2339,
+      "50-64": 0.1812,
+      "65+": 0.2115
+    },
+    "income_per_capita_annual": 28522.94,
+    "avg_rent_monthly": 1150.0,
+    "vacancy_rate": 0.03,
+    "unemployment_rate": 0.07,
+    "jobs_per_resident": 0.55,
+    "shops": 5529,
+    "transit_score": 0.8,
+    "centroid": [
+      2.15223,
+      41.41026
+    ],
+    "sources": {
+      "population": "opendata",
+      "age_distribution": "derived",
+      "income_per_capita_annual": "opendata",
+      "avg_rent_monthly": "plausible",
+      "vacancy_rate": "plausible",
+      "unemployment_rate": "plausible",
+      "jobs_per_resident": "plausible",
+      "shops": "opendata",
+      "transit_score": "plausible"
+    },
+    "refs": {
+      "population": "pad_mdbas_edat-q (2025)",
+      "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
+      "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
+      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
+      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
+      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
+      "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
+      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
+    }
+  },
+  {
+    "id": "nou_barris",
+    "name": "Nou Barris",
+    "population": 182798,
+    "age_distribution": {
+      "0-17": 0.1512,
+      "18-34": 0.2184,
+      "35-49": 0.2169,
+      "50-64": 0.2029,
+      "65+": 0.2106
+    },
+    "income_per_capita_annual": 18643.25,
+    "avg_rent_monthly": 800.0,
+    "vacancy_rate": 0.05,
+    "unemployment_rate": 0.12,
+    "jobs_per_resident": 0.3,
+    "shops": 4398,
+    "transit_score": 0.6,
+    "centroid": [
+      2.17507,
+      41.44631
+    ],
+    "sources": {
+      "population": "opendata",
+      "age_distribution": "derived",
+      "income_per_capita_annual": "opendata",
+      "avg_rent_monthly": "plausible",
+      "vacancy_rate": "plausible",
+      "unemployment_rate": "plausible",
+      "jobs_per_resident": "plausible",
+      "shops": "opendata",
+      "transit_score": "plausible"
+    },
+    "refs": {
+      "population": "pad_mdbas_edat-q (2025)",
+      "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
+      "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
+      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
+      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
+      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
+      "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
+      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
+    }
+  },
+  {
+    "id": "sant_marti",
+    "name": "Sant Martí",
+    "population": 253194,
+    "age_distribution": {
+      "0-17": 0.1414,
+      "18-34": 0.2203,
+      "35-49": 0.232,
+      "50-64": 0.2021,
+      "65+": 0.2042
+    },
+    "income_per_capita_annual": 23815.01,
+    "avg_rent_monthly": 1100.0,
+    "vacancy_rate": 0.04,
+    "unemployment_rate": 0.09,
+    "jobs_per_resident": 0.75,
+    "shops": 7835,
+    "transit_score": 0.8,
+    "centroid": [
+      2.20104,
+      41.40763
+    ],
+    "sources": {
+      "population": "opendata",
+      "age_distribution": "derived",
+      "income_per_capita_annual": "opendata",
+      "avg_rent_monthly": "plausible",
+      "vacancy_rate": "plausible",
+      "unemployment_rate": "plausible",
+      "jobs_per_resident": "plausible",
+      "shops": "opendata",
+      "transit_score": "plausible"
+    },
+    "refs": {
+      "population": "pad_mdbas_edat-q (2025)",
+      "age_distribution": "derived from pad_mdbas_edat-q (2025) EDAT_Q five-year bands, 15-19 band split 60/40 between 0-17 and 18-34 assuming uniform ages within band",
+      "income_per_capita_annual": "renda-disponible-llars-bcn (2023), population-weighted mean of census-section values (weights from pad_mdbas_edat-q 2025)",
+      "avg_rent_monthly": "plausible: no district-level Open Data BCN rent dataset found; see PLAUSIBLE_DEFAULTS docstring",
+      "vacancy_rate": "plausible: no district-level Open Data BCN housing-vacancy dataset found",
+      "unemployment_rate": "plausible: no district-level Open Data BCN unemployment dataset found",
+      "jobs_per_resident": "plausible: no job-location dataset found; qualitative district role (residential vs commercial core)",
+      "shops": "cens-locals-planta-baixa-act-economica (2024), ground-floor premises, rows with Nom_Sector_Activitat in ['Locals buits en lloguer', 'Locals buits en venda', 'Locals buits en venda i lloguer'] excluded as vacant",
+      "transit_score": "plausible: subjective 0..1 based on known metro/tram density and topography"
+    }
+  }
+]
