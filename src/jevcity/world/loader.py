@@ -22,6 +22,14 @@ _NUMERIC_FIELDS = (
     "transit_score",
 )
 
+# Optional realism fields: None (unknown) is allowed, but if set they must carry a `sources`
+# entry too, and pass a sanity range check. (field name -> (min, max), exclusive of None)
+_OPTIONAL_NUMERIC_FIELDS: dict[str, tuple[float, float]] = {
+    "income_per_household_annual": (5_000.0, 250_000.0),
+    "owner_share": (0.0, 1.0),
+    "avg_household_size": (1.0, 6.0),
+}
+
 
 def load_profiles(path: str | Path) -> list[DistrictProfile]:
     """Read data/processed/districts.json (a JSON list of DistrictProfile) and validate it."""
@@ -85,5 +93,20 @@ def load_profiles(path: str | Path) -> list[DistrictProfile]:
                 f"district {p.id!r} in {path}: missing sources entry for field(s) "
                 f"{missing_sources}; every numeric field must carry a Source"
             )
+
+        for field, (lo, hi) in _OPTIONAL_NUMERIC_FIELDS.items():
+            value = getattr(p, field)
+            if value is None:
+                continue
+            if field not in p.sources:
+                raise ValueError(
+                    f"district {p.id!r} in {path}: {field} is set but has no sources entry; "
+                    "optional realism fields must carry a Source when not None"
+                )
+            if not (lo <= value <= hi):
+                raise ValueError(
+                    f"district {p.id!r} in {path}: {field}={value!r} outside sane range "
+                    f"[{lo}, {hi}]"
+                )
 
     return profiles

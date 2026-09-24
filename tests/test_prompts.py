@@ -15,6 +15,7 @@ from jevcity.types import (
     Event,
     EventKind,
     Occupation,
+    Tenure,
     World,
     question_key,
 )
@@ -60,6 +61,7 @@ def make_agent(
     household_size: int = 2,
     satisfaction: float = 0.5,
     spending_level: float = 0.5,
+    tenure: Tenure = Tenure.RENTER,
 ) -> Agent:
     return Agent(
         id=agent_id,
@@ -76,6 +78,7 @@ def make_agent(
         spending_level=spending_level,
         satisfaction=satisfaction,
         days_unemployed=days_unemployed,
+        tenure=tenure,
     )
 
 
@@ -184,6 +187,29 @@ class TestBuildRequestsK1:
         reqs = build_requests(world, {1: agent}, events, tick=100, agents_per_request=1)
         _assert_ascii_english(reqs[0].state)
 
+    def test_renter_state_says_rents_their_home(self, profiles):
+        world = make_world(profiles)
+        agent = make_agent(1, home="eixample", tenure=Tenure.RENTER)
+        events = [Event(agent_id=1, kind=EventKind.PAYDAY)]
+        reqs = build_requests(world, {1: agent}, events, tick=100, agents_per_request=1)
+        person_text = reqs[0].state["person"]["rent_burden"]
+        assert "rents their home" in person_text
+        assert "rent takes" in person_text
+
+    def test_owner_state_says_owns_their_home_and_housing_cost(self, profiles):
+        world = make_world(profiles)
+        young_owner = make_agent(1, home="eixample", age=30, tenure=Tenure.OWNER, rent_monthly=300.0)
+        old_owner = make_agent(2, home="eixample", age=70, tenure=Tenure.OWNER, rent_monthly=200.0)
+        events = [Event(agent_id=1, kind=EventKind.PAYDAY), Event(agent_id=2, kind=EventKind.PAYDAY)]
+        reqs = build_requests(
+            world, {1: young_owner, 2: old_owner}, events, tick=100, agents_per_request=1
+        )
+        texts = {r.agent_ids[0]: r.state["person"]["rent_burden"] for r in reqs}
+        assert "owns their home (mortgage)" in texts[1]
+        assert "housing cost takes" in texts[1]
+        assert "owns their home outright" in texts[2]
+        assert "housing cost takes" in texts[2]
+
 
 class TestBuildRequestsKN:
     def test_packing_and_people_keys(self, profiles):
@@ -243,6 +269,14 @@ class TestMockPriors:
         p_comfortable = mock_priors_for_agent(comfortable, [], world)
         p_burdened = mock_priors_for_agent(burdened, [], world)
         assert p_burdened["action"][Action.MOVE.value] > p_comfortable["action"][Action.MOVE.value]
+
+    def test_owner_much_less_likely_to_move(self, profiles):
+        world = make_world(profiles)
+        renter = make_agent(1, home="eixample", tenure=Tenure.RENTER, wage_monthly=1200, rent_monthly=1100)
+        owner = make_agent(2, home="eixample", tenure=Tenure.OWNER, wage_monthly=1200, rent_monthly=1100)
+        p_renter = mock_priors_for_agent(renter, [], world)
+        p_owner = mock_priors_for_agent(owner, [], world)
+        assert p_owner["action"][Action.MOVE.value] < p_renter["action"][Action.MOVE.value]
 
     def test_priors_cover_all_question_names_and_options(self, profiles):
         world = make_world(profiles)

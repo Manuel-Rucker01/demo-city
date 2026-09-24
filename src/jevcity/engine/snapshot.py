@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from jevcity.types import Agent, DistrictId, DistrictSnapshot, Occupation, World
+from jevcity.types import Agent, DistrictId, DistrictSnapshot, Occupation, Tenure, World
 
 _NON_WORKING_AGE = (Occupation.STUDENT, Occupation.RETIRED)
 
@@ -11,7 +11,10 @@ def build_district_snapshots(world: World, agents: dict[int, Agent]) -> list[Dis
     """One DistrictSnapshot per district in `world.states`, computed from current residents.
 
     unemployment_rate is computed among working-age (not student, not retired) residents only,
-    matching `Agent.income_monthly`'s treatment of those occupations.
+    matching `Agent.income_monthly`'s treatment of those occupations. avg_paid_rent and
+    avg_rent_burden are computed over RENTER residents only: owners' `rent_monthly` is a
+    housing cost (mortgage/fees), not a market lease payment, and mixing the two would distort
+    both the "rent actually paid" and "rent burden" figures the run log reports.
     """
     residents_by_district: dict[DistrictId, list[Agent]] = {did: [] for did in world.states}
     for agent in agents.values():
@@ -22,10 +25,12 @@ def build_district_snapshots(world: World, agents: dict[int, Agent]) -> list[Dis
         state = world.states[did]
         residents = residents_by_district.get(did, [])
         n = len(residents)
+        renters = [a for a in residents if a.tenure is Tenure.RENTER]
+        n_renters = len(renters)
 
-        avg_paid_rent = sum(a.rent_monthly for a in residents) / n if n else 0.0
+        avg_paid_rent = sum(a.rent_monthly for a in renters) / n_renters if n_renters else 0.0
         avg_satisfaction = sum(a.satisfaction for a in residents) / n if n else 0.0
-        avg_rent_burden = sum(a.rent_burden for a in residents) / n if n else 0.0
+        avg_rent_burden = sum(a.rent_burden for a in renters) / n_renters if n_renters else 0.0
 
         working_age = [a for a in residents if a.occupation not in _NON_WORKING_AGE]
         unemployment_rate = (

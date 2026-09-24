@@ -25,7 +25,17 @@ Formulas (documented here so README/docs can quote them verbatim):
 - apply_decisions / MOVE: feasible when the destination has a vacant unit (unless it's
   the same district - a relet, always allowed), new_rent = min(dst.avg_rent,
   dst.rent_cap) is affordable (new_rent <= 0.6 * income OR savings >= 6 * new_rent),
-  and savings >= moving_cost.
+  and savings >= moving_cost. **Owners who move**: they sell the current home and become
+  a renter at the destination's market rent (owners are never affected by rent caps or
+  the destination's affordability check uses savings *plus* the sale proceeds, since the
+  sale and the new lease happen as part of the same transaction): equity =
+  min(OWNER_EQUITY_RENT_MULTIPLE (24) * source district's avg_rent, OWNER_EQUITY_CAP
+  (500_000)), added to savings alongside the usual `-moving_cost`; `tenure` flips to
+  RENTER, `rent_monthly` becomes the destination's market rent (a lease, not a housing
+  cost) and `lease_start_tick` resets to this tick like any new lease. Housing stock is a
+  single pool of units per district that owners and renters share (see init_world); the
+  simulation doesn't separately track a "for sale" stock, so rental vacancy is
+  approximated by the district's overall vacancy_rate.
 - apply_decisions / JOB_SEARCH: best district = home if it has vacancies, else a
   vacancy-weighted random pick among districts with vacancies; success probability =
   job_match_daily_prob * min(1, vacancies_in_best_district / JOB_SEARCH_VACANCY_SCALE).
@@ -58,6 +68,7 @@ from jevcity.types import (
     MoveRecord,
     RentCapPolicy,
     Scenario,
+    Tenure,
     TickDelta,
     World,
 )
@@ -65,6 +76,8 @@ from jevcity.world._helpers import clip, is_working_age
 
 RENEWAL_INCREASE_CAP_DEFAULT = 0.10  # fallback when no policy sets max_increase_pct
 JOB_SEARCH_VACANCY_SCALE = 10.0  # vacancies at which job_search success prob saturates
+OWNER_EQUITY_RENT_MULTIPLE = 24.0  # equity realized on sale ~= 24 months of source avg_rent
+OWNER_EQUITY_CAP = 500_000.0
 
 
 def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
@@ -175,8 +188,17 @@ def apply_decisions(
                     if dst_state.rent_cap is not None:
                         new_rent = min(new_rent, dst_state.rent_cap)
                     income = agent.income_monthly
-                    affordable = new_rent <= 0.6 * income or agent.savings >= 6 * new_rent
-                    can_pay_moving = agent.savings >= market.moving_cost
+                    was_owner = agent.tenure is Tenure.OWNER
+                    # An owner sells as part of the same move; the sale proceeds (equity)
+                    # count toward affording the new lease. See module docstring.
+                    equity = (
+                        min(OWNER_EQUITY_RENT_MULTIPLE * src_state.avg_rent, OWNER_EQUITY_CAP)
+                        if was_owner
+                        else 0.0
+                    )
+                    effective_savings = agent.savings + equity
+                    affordable = new_rent <= 0.6 * income or effective_savings >= 6 * new_rent
+                    can_pay_moving = effective_savings >= market.moving_cost
                     if not (affordable and can_pay_moving):
                         failed_moves += 1
                     else:
@@ -188,7 +210,9 @@ def apply_decisions(
                         agent.rent_monthly = new_rent
                         agent.lease_start_tick = tick
                         agent.last_move_tick = tick
-                        agent.savings -= market.moving_cost
+                        agent.savings += equity - market.moving_cost
+                        if was_owner:
+                            agent.tenure = Tenure.RENTER
         elif decision.action == Action.JOB_SEARCH and not agent.employed:
             home_state = world.states.get(agent.home)
             best_state = None

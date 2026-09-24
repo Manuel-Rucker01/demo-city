@@ -15,6 +15,7 @@ from jevcity.types import (
     Occupation,
     RentCapPolicy,
     Scenario,
+    Tenure,
 )
 from jevcity.world.market import apply_decisions, apply_policies, daily_update, init_world
 
@@ -36,6 +37,7 @@ def make_agent(
     satisfaction=0.6,
     days_unemployed=0,
     last_move_tick=None,
+    tenure=Tenure.RENTER,
 ) -> Agent:
     if employed and job_district is None:
         job_district = home
@@ -57,6 +59,7 @@ def make_agent(
         satisfaction=satisfaction,
         days_unemployed=days_unemployed,
         last_move_tick=last_move_tick,
+        tenure=tenure,
     )
 
 
@@ -308,6 +311,58 @@ def test_move_feasible_updates_state(profiles):
     assert src.home == dst_id
     assert world.states[profiles[0].id].occupied_units == before_src_occ - 1
     assert world.states[dst_id].occupied_units == before_dst_occ + 1
+
+
+# --- owner move (sells, becomes a renter) -------------------------------------------------
+
+
+def test_owner_move_becomes_renter_at_market_rent(profiles):
+    rng = np.random.default_rng(5)
+    src = make_agent(
+        0, profiles[0].id, tenure=Tenure.OWNER, rent_monthly=200.0,
+        savings=1000.0, wage_monthly=3000.0,
+    )
+    world = init_world(profiles, [src])
+    dst_id = profiles[1].id
+    world.states[dst_id].housing_units = world.states[dst_id].occupied_units + 5
+    agents_dict = {0: src}
+    scenario = make_scenario(market=MarketParams(moving_cost=500.0))
+    decision = AgentDecision(
+        agent_id=0, tick=1, action=Action.MOVE, destination=dst_id,
+        spending=0.5, satisfaction=0.6, confidence=0.9,
+    )
+    savings_before = src.savings
+    delta = apply_decisions(world, agents_dict, [decision], scenario, rng, 1)
+    assert delta.failed_moves == 0
+    assert src.tenure == Tenure.RENTER
+    assert src.home == dst_id
+    assert src.rent_monthly == pytest.approx(world.states[dst_id].avg_rent)
+    assert src.lease_start_tick == 1
+    # equity (24 x source avg_rent) was credited, minus the moving cost.
+    expected_equity = 24 * profiles[0].avg_rent_monthly
+    assert src.savings == pytest.approx(savings_before + expected_equity - 500.0)
+
+
+def test_owner_move_uses_equity_for_affordability(profiles):
+    """An owner with little cash but a valuable home can still afford to move: equity from
+    the sale counts toward the affordability and moving-cost checks."""
+    rng = np.random.default_rng(5)
+    src = make_agent(
+        0, profiles[0].id, tenure=Tenure.OWNER, rent_monthly=200.0,
+        savings=100.0, wage_monthly=500.0,
+    )
+    world = init_world(profiles, [src])
+    dst_id = profiles[1].id
+    world.states[dst_id].housing_units = world.states[dst_id].occupied_units + 5
+    agents_dict = {0: src}
+    scenario = make_scenario(market=MarketParams(moving_cost=500.0))
+    decision = AgentDecision(
+        agent_id=0, tick=1, action=Action.MOVE, destination=dst_id,
+        spending=0.5, satisfaction=0.6, confidence=0.9,
+    )
+    delta = apply_decisions(world, agents_dict, [decision], scenario, rng, 1)
+    assert delta.failed_moves == 0
+    assert src.tenure == Tenure.RENTER
 
 
 # --- job search ---------------------------------------------------------------------------
