@@ -17,13 +17,10 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-# --- Jev facts (from docs.typesafe.ai/models, reviewed 2026-09-24) -------------------------
+# --- Jev facts (docs.typesafe.ai, reviewed 2026-09-24) -------------------------
 
-JEV_MODEL_ID = "jev-1.13.0"  # pinned, not the jev-latest alias, so runs are reproducible
-JEV_API_URL = "https://api.typesafe.ai/v1/systemone"
-JEV_PRICE_PER_MTOK_USD = 0.042  # input tokens only; output tokens are free
-JEV_RATE_LIMIT_RPM = 1200
-JEV_RATE_LIMIT_TPS = 250_000
+# Provider URLs, limits and prices live in config/providers.yaml, not here.
+JEV_MODEL_ID = "jev-1.13.0"  # TypeSafe pinned id (not jev-latest) so runs are reproducible
 JEV_MAX_CHOICE_OPTIONS = 255
 JEV_MAX_SCORE_LEVELS = 10
 
@@ -199,14 +196,20 @@ class DecisionRequest(BaseModel):
 class JevUsage(BaseModel):
     input_tokens: int
     output_tokens: int = 0
+    cost_usd: float | None = None  # cost reported by the provider (OpenRouter usage.cost,
+    #                                Vercel providerMetadata.gateway.cost); None = not reported
 
 
 class JevResponse(BaseModel):
-    """Raw API response body (docs.typesafe.ai/api#response-body)."""
+    """Canonical response, always in TypeSafe shape (docs.typesafe.ai/api#response-body):
+    answer types are "choice" | "score" | "noul". Provider codecs translate into this
+    (e.g. Vercel native {"type":"boolean","probability":p} -> {"type":"noul","noul":p})."""
 
-    model: str
-    answers: dict[str, dict[str, Any]]  # question key -> answer object (type, choice|score|noul, ...)
+    model: str  # model string exactly as the provider reported it (log it: jev-latest moves)
+    answers: dict[str, dict[str, Any]]  # question key -> answer object
     usage: JevUsage
+    provider: str = "typesafe"
+    meta: dict[str, Any] = Field(default_factory=dict)  # provider extras: id, routing, generationId
 
 
 class AgentDecision(BaseModel):
@@ -233,23 +236,46 @@ class TickDelta:
 
 # --- Jev adapter ---------------------------------------------------------------------------
 
-JevMode = Literal["mock", "real", "replay"]
+ProviderName = Literal["mock", "typesafe", "openrouter", "vercel"]
+WireFormat = Literal["systemone", "vercel_evaluate", "openrouter_decisions"]
+BatchingMode = Literal["quality", "throughput"]
+CostSource = Literal["none", "computed", "reported", "estimated", "mixed"]
+
+
+class ProviderSettings(BaseModel):
+    """One entry of config/providers.yaml. Limits are configuration, never code constants."""
+
+    base_url: str
+    path: str  # appended to base_url, e.g. "/v1/systemone"
+    wire: WireFormat  # request/response format spoken at that path
+    api_key_env: str | None  # None for mock
+    default_model: str
+    rpm_limit: int | None = None  # None = no client-side limit (still adaptive on 429)
+    tps_limit: int | None = None  # input tokens per second
+    max_context_tokens: int = 32_000  # state + all questions
+    max_state_plus_question_tokens: int | None = None
+    price_per_mtok_usd: float | None = None  # used only when the provider does not report cost
+    docs: list[str] = Field(default_factory=list)
+    todo: list[str] = Field(default_factory=list)  # undocumented behaviour, verify before real use
 
 
 class JevConfig(BaseModel):
-    mode: JevMode = "mock"
-    model: str = JEV_MODEL_ID
-    api_key_env: str = "JEV_API_KEY"
-    base_url: str = JEV_API_URL
-    agents_per_request: int = 1  # K; >1 packs several agents into one state
-    max_concurrency: int = 16
-    rpm_limit: int = int(JEV_RATE_LIMIT_RPM * 0.9)  # safety margin; docs say limits move
-    tps_limit: int = int(JEV_RATE_LIMIT_TPS * 0.9)
-    max_retries: int = 5
+    provider: ProviderName = "mock"  # env JEV_PROVIDER overrides this
+    model: str | None = None  # None -> provider default_model
+    wire: WireFormat | None = None  # None -> provider default wire
+    providers_file: str = "config/providers.yaml"
+    overrides: dict[str, Any] = Field(default_factory=dict)  # ProviderSettings field overrides
+    mock_as: ProviderName = "typesafe"  # mock estimates cost/limits as if it were this provider
+    batching: BatchingMode = "quality"  # quality: K=agents_per_request; throughput: auto K
+    agents_per_request: int = 1  # K in quality mode
+    max_agents_per_request: int = 64  # cap for auto K in throughput mode
+    rate_safety: float = 0.9  # use this fraction of configured limits
+    max_concurrency: int = 32
+    max_retries: int = 6
     timeout_s: float = 10.0
     confidence_threshold: float = 0.35  # action answers below this fall back to STAY
-    replay_from: str | None = None  # path to a runs/<id>/jev_calls.ndjson for replay mode
-    max_cost_usd: float = 5.0  # hard stop for real mode
+    replay_from: str | None = None  # runs/<id>/jev_calls.ndjson -> answers come from the log
+    max_cost_usd: float = 5.0  # hard stop for paid providers
 
 
 class Usage(BaseModel):
@@ -257,33 +283,47 @@ class Usage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
-    estimated: bool = False  # True when tokens are estimated (mock) rather than reported by API
+    cost_source: CostSource = "none"
+    estimated: bool = False  # True when tokens are estimated (mock) rather than reported
     retries: int = 0
+    rate_limited: int = 0  # 429 responses received
     errors: int = 0
-    cache_hits: int = 0
+    cache_hits: int = 0  # replayed answers
+    models_seen: dict[str, int] = Field(default_factory=dict)  # resolved model -> responses
 
     def add(self, other: Usage) -> Usage:
+        sources = {self.cost_source, other.cost_source} - {"none"}
+        models = dict(self.models_seen)
+        for m, n in other.models_seen.items():
+            models[m] = models.get(m, 0) + n
         return Usage(
             requests=self.requests + other.requests,
             input_tokens=self.input_tokens + other.input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             cost_usd=self.cost_usd + other.cost_usd,
+            cost_source=sources.pop() if len(sources) == 1 else ("mixed" if sources else "none"),
             estimated=self.estimated or other.estimated,
             retries=self.retries + other.retries,
+            rate_limited=self.rate_limited + other.rate_limited,
             errors=self.errors + other.errors,
             cache_hits=self.cache_hits + other.cache_hits,
+            models_seen=models,
         )
 
 
 class CallRecord(BaseModel):
-    """One line of runs/<id>/jev_calls.ndjson. Enough to replay without calling Jev."""
+    """One line of runs/<id>/jev_calls.ndjson. Enough to replay without calling any provider."""
 
     tick: int
     request_id: str
-    cache_key: str  # sha256 of canonical JSON {model, state, questions}
-    mode: JevMode
-    request: dict[str, Any]  # exact body sent: {state, model, questions}
-    response: JevResponse
+    cache_key: str  # sha256 of canonical JSON {state, questions} (provider/model independent)
+    provider: ProviderName
+    replayed: bool = False
+    requested_model: str
+    resolved_model: str  # == response.model
+    request: dict[str, Any]  # canonical TypeSafe-shaped body {state, model, questions}
+    wire_body: dict[str, Any] | None = None  # exact body sent when it differs from `request`
+    response: JevResponse  # canonical
     latency_ms: float
     attempts: int
 
@@ -293,7 +333,8 @@ class CallSink(Protocol):
 
 
 class JevBackend(Protocol):
-    mode: JevMode
+    provider: ProviderName
+    settings: ProviderSettings
 
     async def evaluate_many(self, reqs: Sequence[DecisionRequest]) -> list[JevResponse]:
         """Evaluate all requests concurrently within rate limits; result order == input order."""
@@ -394,7 +435,7 @@ class TickRecord(BaseModel):
     gated_decisions: int
     moves: list[MoveRecord]
     changes: list[AgentChange]
-    usage_tick: Usage
+    usage_tick: Usage  # usage_tick.models_seen = exact model versions that answered this tick
     usage_total: Usage
 
 
@@ -404,7 +445,9 @@ class RunMeta(BaseModel):
     scenario: Scenario
     profiles: list[DistrictProfile]
     start_date: str = SIM_START_DATE
-    jev_model: str = JEV_MODEL_ID
+    jev_provider: ProviderName = "mock"
+    jev_model_requested: str = JEV_MODEL_ID
+    jev_wire: WireFormat = "systemone"
 
 
 class AgentSnapshot(BaseModel):

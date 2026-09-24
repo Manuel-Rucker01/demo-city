@@ -5,8 +5,9 @@ ticks: 365
 n_agents: 1000
 data_path: data/processed/districts.json
 jev:
-  mode: mock
+  provider: mock           # or env JEV_PROVIDER=mock|typesafe|openrouter|vercel
   agents_per_request: 1
   confidence_threshold: 0.35
+  batching: quality
   max_cost_usd: 5.0
 policies: []

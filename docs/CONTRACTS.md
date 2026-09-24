@@ -53,11 +53,29 @@ runs/<run_id>/summary.json       RunSummary (written at the end)
 District polygons: `data/processed/districts.geojson` (FeatureCollection, `properties.id` =
 DistrictId, WGS84), copied to `web/public/data/districts.geojson`.
 
-## Modes
+## Providers (jev/)
 
-- `mock`: no network. Weighted random answers from `DecisionRequest.mock_priors`, same JSON
-  shape as the real API, token usage estimated as len(canonical JSON body)/4, `Usage.estimated=True`.
-- `real`: httpx POST to `JevConfig.base_url`, key from env `JEV_API_KEY`, rate limited
-  (RPM + tokens/s), retries 408/429/5xx/529 with exp backoff + honors retry-after.
-- `replay`: answers looked up by `cache_key` in a previous `jev_calls.ndjson`; a miss is an error
-  (never falls back to the network).
+`JEV_PROVIDER=mock|typesafe|openrouter|vercel` (env wins over `scenario.jev.provider`).
+Provider settings (URL, path, wire format, key env var, default model, rpm/tps limits,
+context size, fallback price, TODOs) come from `config/providers.yaml`; scenario
+`jev.overrides` and env `JEV_RPM_LIMIT`, `JEV_TPS_LIMIT`, `JEV_MODEL`, `JEV_BASE_URL` override them.
+
+- Inside jevcity everything is TypeSafe-shaped (`noul`/`choice`/`score`, `confidence`,
+  `legend`, `usage.input_tokens`). Each wire format has a codec: `encode(canonical body) ->
+  wire body` and `decode(wire response) -> JevResponse`. Nothing outside `jev/` knows the provider.
+- Wire formats: `systemone` (TypeSafe; also OpenRouter `/api/v1/systemone` and Vercel
+  `/typesafe/v1/systemone`), `openrouter_decisions` (`/api/alpha/decisions`, same schema),
+  `vercel_evaluate` (`/v1/evaluate`: `boolean`/`probability`, camelCase usage, cost in
+  `providerMetadata.gateway.cost`).
+- `mock`: no network. Weighted random answers from `DecisionRequest.mock_priors`, tokens
+  estimated as len(canonical JSON body)/4, cost estimated at the `mock_as` provider's price,
+  `Usage.estimated=True`.
+- Replay (`jev.replay_from`): answers looked up by `cache_key` in a previous
+  `jev_calls.ndjson`; a miss is an error (never falls back to the network).
+- Every response's `model` (exact version reported) is kept in `CallRecord.resolved_model` and
+  counted in `Usage.models_seen`; the engine warns if it changes mid-run.
+- Rate limiting: token buckets for rpm and input tokens/s at `rate_safety` x configured limits,
+  adaptive (x0.7 on 429, slow recovery), exponential backoff with jitter on 408/429/5xx/524/529,
+  honoring `retry-after` / `retry-after-ms`.
+- Batching: `quality` uses K = `agents_per_request` (default 1). `throughput` picks the
+  largest K <= `max_agents_per_request` whose estimated request fits the provider context.

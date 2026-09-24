@@ -1,0 +1,75 @@
+# Jev providers. All limits are configuration: they change without notice.
+# Override per scenario with `jev.overrides`, or per run with env vars
+# JEV_RPM_LIMIT / JEV_TPS_LIMIT / JEV_MODEL / JEV_BASE_URL.
+# Canonical request/response format inside jevcity is TypeSafe's (noul/choice/score).
+
+mock:
+  base_url: "mock://local"
+  path: ""
+  wire: systemone
+  api_key_env: null
+  default_model: jev-1.13.0
+  rpm_limit: null
+  tps_limit: null
+  max_context_tokens: 64000
+  max_state_plus_question_tokens: 32000
+  price_per_mtok_usd: 0.042
+  docs: []
+  todo: []
+
+typesafe:
+  base_url: "https://api.typesafe.ai"
+  path: "/v1/systemone"
+  wire: systemone
+  api_key_env: TYPESAFE_API_KEY
+  default_model: jev-1.13.0          # pinned; "jev-latest" is an alias that moves
+  rpm_limit: 1200
+  tps_limit: 250000
+  max_context_tokens: 64000          # state + all questions
+  max_state_plus_question_tokens: 32000
+  price_per_mtok_usd: 0.042          # input only; output free
+  docs:
+    - https://docs.typesafe.ai/api
+    - https://docs.typesafe.ai/models
+  todo:
+    - "Latency is not documented; measure."
+    - "Tokenizer is not documented; pre-call token counts are estimates (len/4)."
+
+openrouter:
+  base_url: "https://openrouter.ai/api"
+  path: "/v1/systemone"              # TypeSafe-compatible surface; same schema as /api/alpha/decisions
+  wire: systemone
+  api_key_env: OPENROUTER_API_KEY
+  default_model: typesafe/jev-1.13   # response reports e.g. typesafe/jev-1.13-20260917
+  rpm_limit: 1200                    # TODO: no Jev-specific limit documented; upstream TypeSafe limits assumed
+  tps_limit: 250000                  # TODO: idem
+  max_context_tokens: 32000          # documented: state + questions
+  max_state_plus_question_tokens: null
+  price_per_mtok_usd: 0.042          # fallback only; response carries usage.cost (USD)
+  docs:
+    - https://openrouter.ai/docs/guides/community/jev
+    - https://openrouter.ai/docs/api/api-reference/systemone/submit-a-system-one-request
+    - https://openrouter.ai/docs/api_reference/limits
+  todo:
+    - "Rate limits for Jev are not documented; 429 may come from OpenRouter or upstream."
+    - "Decisions API (/api/alpha/decisions) is alpha; wire openrouter_decisions uses it with the same schema."
+
+vercel:
+  base_url: "https://ai-gateway.vercel.sh"
+  path: "/typesafe/v1/systemone"     # TypeSafe-compatible surface (keeps confidence + legend)
+  wire: systemone                    # alternative: wire vercel_evaluate -> path /v1/evaluate
+  api_key_env: AI_GATEWAY_API_KEY
+  default_model: typesafe-ai/jev
+  rpm_limit: 1200                    # TODO: paid tier has no gateway limit; upstream TypeSafe limits assumed
+  tps_limit: 250000
+  max_context_tokens: 32000          # TODO: not documented for the gateway; conservative
+  max_state_plus_question_tokens: null
+  price_per_mtok_usd: 0.042          # fallback only; response carries providerMetadata.gateway.cost
+  docs:
+    - https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe
+    - https://vercel.com/docs/ai-gateway/modalities/evaluation
+    - https://vercel.com/docs/ai-gateway/rate-limits
+  todo:
+    - "Response `model` is 'typesafe-ai/jev' in docs examples: exact Jev version is not documented; routing metadata and generationId are logged instead."
+    - "Native /v1/evaluate examples show no `confidence` or `legend`; if absent, confidence is computed locally and flagged."
+    - "Context length and pinned model ids are not documented."
