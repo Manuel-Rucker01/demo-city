@@ -59,6 +59,11 @@ class DistrictProfile(BaseModel):
     centroid: tuple[float, float]  # (lon, lat)
     sources: dict[str, Source]  # field name -> provenance, for every numeric field above
     refs: dict[str, str] = Field(default_factory=dict)  # field name -> dataset id / note
+    # Optional realism fields (None = unknown -> modules fall back to defaults). When set, they
+    # must also have a `sources` entry.
+    income_per_household_annual: float | None = None  # EUR, gross or disposable (see refs)
+    owner_share: float | None = None  # share of households owning their home, 0..1
+    avg_household_size: float | None = None  # persons per household
 
 
 class DistrictState(BaseModel):
@@ -100,6 +105,11 @@ class World:
 # --- Agents --------------------------------------------------------------------------------
 
 
+class Tenure(StrEnum):
+    RENTER = "renter"
+    OWNER = "owner"
+
+
 class Occupation(StrEnum):
     STUDENT = "student"
     LOW_SKILL = "low_skill"
@@ -127,6 +137,8 @@ class Agent:
     satisfaction: float  # 0..1
     days_unemployed: int = 0
     last_move_tick: int | None = None
+    tenure: Tenure = Tenure.RENTER  # owners: rent_monthly holds their housing cost
+    #                                 (mortgage/fees), fixed; no lease renewals
 
     @property
     def income_monthly(self) -> float:
@@ -463,6 +475,7 @@ class AgentSnapshot(BaseModel):
     wage_monthly: float
     rent_monthly: float
     satisfaction: float
+    tenure: Tenure = Tenure.RENTER
 
 
 class RunSummary(BaseModel):
