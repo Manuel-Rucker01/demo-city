@@ -146,23 +146,23 @@ def mock_priors_for_agent(
     # --- action ---
     action_w = {
         Action.STAY: 6.0,
-        Action.MOVE: 0.3,
+        Action.MOVE: 0.05,
         Action.JOB_SEARCH: 0.2,
         Action.SPEND: 1.0,
         Action.SAVE: 1.0,
     }
     label = burden_label(burden)
     if label == "high":
-        action_w[Action.MOVE] += 2.0
+        action_w[Action.MOVE] += 0.4
     elif label == "severe":
-        action_w[Action.MOVE] += 4.0
+        action_w[Action.MOVE] += 0.9
     for ev in events:
         if ev.kind is EventKind.LEASE_RENEWAL:
             increase = float(ev.payload.get("increase_pct", 0.0))
             if increase > 0.08:
-                action_w[Action.MOVE] += 2.0
+                action_w[Action.MOVE] += 1.5
         if ev.kind is EventKind.LIFE_EVENT and ev.payload.get("kind") in ("new_child", "partner"):
-            action_w[Action.MOVE] += 1.0
+            action_w[Action.MOVE] += 0.8
         if ev.kind is EventKind.JOB_LOSS:
             action_w[Action.JOB_SEARCH] += 6.0
         if ev.kind is EventKind.PAYDAY:

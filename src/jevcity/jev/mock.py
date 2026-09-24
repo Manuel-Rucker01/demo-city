@@ -28,7 +28,7 @@ from .cachekey import cache_key, request_body
 from .codecs import peak_confidence
 from .meter import UsageMeter, computed_cost_usd, estimate_tokens
 
-_CONCENTRATION = 8.0  # higher = samples cluster tighter around the prior weights
+_CONCENTRATION = 20.0  # Dirichlet sharpness: higher = answers closer to the priors
 
 
 def _normalized_weights(prior: dict[str, float], keys: Sequence[str]) -> np.ndarray:

@@ -172,7 +172,11 @@ async def run_simulation(
                         break
                     raise
                 decisions = decision_parse.parse_decisions(
-                    reqs, responses, scenario.jev.confidence_threshold
+                    reqs,
+                    responses,
+                    scenario.jev.confidence_threshold,
+                    policy=scenario.jev.decision_policy,
+                    seed=scenario.seed,
                 )
             else:
                 decisions = []

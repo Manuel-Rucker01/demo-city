@@ -273,7 +273,8 @@ class JevConfig(BaseModel):
     max_concurrency: int = 32
     max_retries: int = 6
     timeout_s: float = 10.0
-    confidence_threshold: float = 0.35  # action answers below this fall back to STAY
+    decision_policy: Literal["sample", "argmax", "gate"] = "sample"  # how a Choice becomes an action
+    confidence_threshold: float = 0.35  # only for decision_policy "gate": below -> STAY
     replay_from: str | None = None  # runs/<id>/jev_calls.ndjson -> answers come from the log
     max_cost_usd: float = 5.0  # hard stop for paid providers
 
@@ -365,17 +366,17 @@ Policy = RentCapPolicy  # becomes a discriminated union as policies are added
 class MarketParams(BaseModel):
     rent_adjust_interval: int = TICKS_PER_MONTH
     rent_elasticity: float = 0.6  # monthly rent change per unit of excess demand ratio
-    max_monthly_rent_change: float = 0.03
+    max_monthly_rent_change: float = 0.008  # ~10%/yr ceiling
     target_vacancy: float = 0.05
     renewal_increase_cap: float = 0.10  # max renewal increase absent policy
-    job_match_daily_prob: float = 0.08  # per job_search decision, scaled by vacancies
+    job_match_daily_prob: float = 0.3  # per job_search decision, scaled by vacancies
     spend_to_jobs: float = 0.00002  # new job slots per EUR of monthly shop revenue surplus
     moving_cost: float = 1500.0
 
 
 class EventParams(BaseModel):
-    job_loss_daily_prob: float = 0.0003
-    job_offer_daily_prob: float = 0.001
+    job_loss_daily_prob: float = 0.00015
+    job_offer_daily_prob: float = 0.01
     life_event_daily_prob: float = 0.0008
     rent_burden_threshold: float = 0.40
     lease_length_ticks: int = 360

@@ -123,7 +123,7 @@ class _Harness:
             self.k_seen.append(agents_per_request)
             return requests_by_tick.get(tick, [])
 
-        def fake_parse_decisions(reqs, responses, threshold):
+        def fake_parse_decisions(reqs, responses, threshold, **kwargs):
             tick = reqs[0].tick
             self.calls.append(("parse_decisions", tick))
             return decisions_by_tick.get(tick, [])

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import random
 
 from jevcity.types import (
     Action,
@@ -27,13 +29,37 @@ def _score_fraction(answer: dict) -> float:
     return _clamp01(score / (levels - 1))
 
 
+def _pick(answer: dict, policy: str, seed: int, tick: int, agent_id: int, name: str) -> str | None:
+    """Choose an option from a Choice answer.
+
+    "sample": draw from the calibrated probabilities (keeps minority behaviour in the population;
+    argmax over many similar agents would collapse everyone onto the mode). Deterministic per
+    (seed, tick, agent, question) so replays reproduce runs exactly.
+    "argmax"/"gate": the model's top choice.
+    """
+    probs = answer.get("probabilities") or {}
+    if policy != "sample" or not probs:
+        return answer.get("choice")
+    digest = hashlib.sha256(f"{seed}:{tick}:{agent_id}:{name}".encode()).digest()
+    rng = random.Random(int.from_bytes(digest[:8], "big"))
+    options = list(probs)
+    weights = [max(float(probs[o]), 0.0) for o in options]
+    if sum(weights) <= 0:
+        return answer.get("choice")
+    return rng.choices(options, weights=weights, k=1)[0]
+
+
 def parse_decisions(
     reqs: list[DecisionRequest],
     responses: list[JevResponse],
     confidence_threshold: float,
+    policy: str = "gate",
+    seed: int = 0,
 ) -> list[AgentDecision]:
-    """Map answers to decisions. action below threshold -> STAY with gated=True.
-    destination only kept when action == MOVE. Score answers normalized to 0..1."""
+    """Map answers to decisions. Policy "gate": action below threshold -> STAY with gated=True;
+    "argmax": top choice; "sample": draw from the probabilities (see _pick). Missing answers
+    always fall back to STAY (gated). destination only kept when action == MOVE.
+    Score answers normalized to 0..1."""
     decisions: list[AgentDecision] = []
 
     for req, resp in zip(reqs, responses, strict=True):
@@ -63,18 +89,19 @@ def parse_decisions(
             confidence = float(action_ans.get("confidence", 0.0))
             probs = dict(action_ans.get("probabilities", {}))
             gated = False
-            if confidence < confidence_threshold:
+            if policy == "gate" and confidence < confidence_threshold:
                 action = Action.STAY
                 gated = True
             else:
+                chosen = _pick(action_ans, policy, seed, req.tick, agent_id, "action")
                 try:
-                    action = Action(action_ans.get("choice"))
+                    action = Action(chosen)
                 except ValueError:
                     logger.warning(
                         "t%d agent %d: unrecognized action choice %r, falling back to STAY (gated)",
                         req.tick,
                         agent_id,
-                        action_ans.get("choice"),
+                        chosen,
                     )
                     action = Action.STAY
                     gated = True
@@ -92,7 +119,7 @@ def parse_decisions(
                     action = Action.STAY
                     gated = True
                 else:
-                    destination = dest_ans.get("choice")
+                    destination = _pick(dest_ans, policy, seed, req.tick, agent_id, "destination")
 
             spending_ans = resp.answers.get(question_key(agent_id, "spending"))
             if spending_ans is None:

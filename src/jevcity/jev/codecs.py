@@ -48,6 +48,22 @@ def peak_confidence(probs: list[float]) -> float:
     return max(0.0, min(1.0, (n * max(probs) - 1) / (n - 1)))
 
 
+def _absorb_gateway(gateway: dict, meta: dict[str, Any]) -> float | None:
+    """Vercel gateway metadata -> meta; returns the billed cost.
+
+    Observed in a real call (2026-09-24): on free credits `cost` is "0" while `marketCost`
+    carries the list price (input_tokens x $0.042/M). We keep `cost` as what was billed and
+    store `marketCost` as meta["market_cost_usd"] for reporting.
+    """
+    for key in ("routing", "generationId"):
+        if key in gateway:
+            meta[key] = gateway[key]
+    market = _parse_gateway_cost(gateway.get("marketCost"))
+    if market is not None:
+        meta["market_cost_usd"] = market
+    return _parse_gateway_cost(gateway.get("cost"))
+
+
 def _parse_gateway_cost(value: Any) -> float | None:
     """Vercel reports gateway cost as a decimal string, e.g. "0.00001155"."""
     if value is None:
@@ -87,12 +103,14 @@ def decode_systemone(
     # Vercel TypeSafe-compat extras: provider_metadata.gateway {routing, cost, generationId}.
     gateway = wire.get("provider_metadata", {}).get("gateway") if "provider_metadata" in wire else None
     if gateway:
+        billed = _absorb_gateway(gateway, meta)
         if cost_usd is None:
-            cost_usd = _parse_gateway_cost(gateway.get("cost"))
-        if "routing" in gateway:
-            meta["routing"] = gateway["routing"]
-        if "generationId" in gateway:
-            meta["generationId"] = gateway["generationId"]
+            cost_usd = billed
+    # Undocumented extras seen in real responses (e.g. provider_metadata.typesafe) are kept
+    # verbatim without interpretation.
+    extra_pm = {k: v for k, v in (wire.get("provider_metadata") or {}).items() if k != "gateway"}
+    if extra_pm:
+        meta["provider_metadata"] = extra_pm
 
     return JevResponse(
         model=wire["model"],
@@ -158,11 +176,7 @@ def decode_vercel_evaluate(
     meta: dict[str, Any] = {}
     gateway = wire.get("providerMetadata", {}).get("gateway") if "providerMetadata" in wire else None
     if gateway:
-        cost_usd = _parse_gateway_cost(gateway.get("cost"))
-        if "routing" in gateway:
-            meta["routing"] = gateway["routing"]
-        if "generationId" in gateway:
-            meta["generationId"] = gateway["generationId"]
+        cost_usd = _absorb_gateway(gateway, meta)
 
     return JevResponse(
         model=wire["model"],
