@@ -27,7 +27,7 @@ def test_throughput_mode_respects_context_openrouter_smaller_than_typesafe():
     k_openrouter = choose_agents_per_request(
         cfg, openrouter_settings, est_tokens_per_agent=50, est_shared_tokens=1000
     )
-    assert k_openrouter < k_typesafe
+    assert k_openrouter <= k_typesafe <= 8  # both capped by 32 questions / 4 per agent
 
 
 def test_throughput_mode_caps_at_max_agents_per_request():
@@ -44,3 +44,13 @@ def test_throughput_mode_always_at_least_one():
         cfg, settings, est_tokens_per_agent=1_000_000, est_shared_tokens=0
     )
     assert k == 1
+
+
+def test_k_capped_by_max_questions_per_request():
+    from jevcity.jev import choose_agents_per_request
+    from jevcity.types import JevConfig, ProviderSettings
+
+    s = ProviderSettings(base_url="x", path="", wire="systemone", api_key_env=None,
+                         default_model="m", max_context_tokens=64000, max_questions_per_request=32)
+    assert choose_agents_per_request(JevConfig(batching="throughput"), s, 1100, 350) == 8
+    assert choose_agents_per_request(JevConfig(agents_per_request=20), s, 1100, 350) == 8

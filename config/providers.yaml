@@ -27,6 +27,7 @@ typesafe:
   tps_limit: 250000
   max_context_tokens: 64000          # state + all questions
   max_state_plus_question_tokens: 32000
+  max_questions_per_request: 32      # TODO: undocumented; >32 questions got HTTP 503 via Vercel (2026-09-24)
   price_per_mtok_usd: 0.042          # input only; output free
   docs:
     - https://docs.typesafe.ai/api
@@ -45,6 +46,7 @@ openrouter:
   tps_limit: 250000                  # TODO: idem
   max_context_tokens: 32000          # documented: state + questions
   max_state_plus_question_tokens: null
+  max_questions_per_request: 32      # TODO: assumed from the Vercel observation (same upstream)
   price_per_mtok_usd: 0.042          # fallback only; response carries usage.cost (USD)
   docs:
     - https://openrouter.ai/docs/guides/community/jev
@@ -66,6 +68,7 @@ vercel:
   tps_limit: 250000                  # x-ratelimit-limit-tokens: 250000 (observed)
   max_context_tokens: 32000          # TODO: not documented for the gateway; conservative
   max_state_plus_question_tokens: null
+  max_questions_per_request: 32      # OBSERVED 2026-09-24: 33+ questions -> HTTP 503 service_unavailable
   price_per_mtok_usd: 0.042          # fallback only; response carries providerMetadata.gateway.cost
   docs:
     - https://vercel.com/docs/ai-gateway/sdks-and-apis/typesafe

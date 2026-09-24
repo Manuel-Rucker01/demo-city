@@ -266,6 +266,7 @@ class ProviderSettings(BaseModel):
     tps_limit: int | None = None  # input tokens per second
     max_context_tokens: int = 32_000  # state + all questions
     max_state_plus_question_tokens: int | None = None
+    max_questions_per_request: int | None = None  # None = unknown/unlimited
     price_per_mtok_usd: float | None = None  # used only when the provider does not report cost
     docs: list[str] = Field(default_factory=list)
     todo: list[str] = Field(default_factory=list)  # undocumented behaviour, verify before real use

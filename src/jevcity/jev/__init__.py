@@ -11,6 +11,7 @@ from typing import Any, get_args
 import yaml
 
 from jevcity.types import (
+    QUESTION_NAMES,
     CallSink,
     JevBackend,
     JevConfig,
@@ -116,15 +117,24 @@ def choose_agents_per_request(
     cfg: JevConfig, settings: ProviderSettings, est_tokens_per_agent: int, est_shared_tokens: int
 ) -> int:
     """K for this run: cfg.agents_per_request in 'quality' mode; in 'throughput' mode the largest
-    K <= cfg.max_agents_per_request with shared + K*per_agent <= 0.8 * max_context_tokens."""
+    K <= cfg.max_agents_per_request with shared + K*per_agent <= 0.8 * max_context_tokens.
+    Either way K never exceeds settings.max_questions_per_request // len(QUESTION_NAMES)."""
+    k_max_questions = (
+        max(settings.max_questions_per_request // len(QUESTION_NAMES), 1)
+        if settings.max_questions_per_request
+        else None
+    )
     if cfg.batching == "quality":
-        return max(cfg.agents_per_request, 1)
+        k = max(cfg.agents_per_request, 1)
+        return min(k, k_max_questions) if k_max_questions else k
 
     budget = 0.8 * settings.max_context_tokens
     if est_tokens_per_agent <= 0:
         return cfg.max_agents_per_request
     max_k_by_budget = int((budget - est_shared_tokens) // est_tokens_per_agent)
     k = min(cfg.max_agents_per_request, max_k_by_budget)
+    if k_max_questions:
+        k = min(k, k_max_questions)
     return max(k, 1)
 
 
