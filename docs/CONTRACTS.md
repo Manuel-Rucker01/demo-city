@@ -106,6 +106,56 @@ runs/<run_id>/summary.json       RunSummary (written at the end)
 District polygons: `data/processed/districts.geojson` (FeatureCollection, `properties.id` =
 DistrictId, WGS84), copied to `web/public/data/districts.geojson`.
 
+## Batch directory layout (engine/batch.py -> runlog)
+
+`jevcity batch` writes one ordinary run directory per seed plus a batch-level summary:
+
+```
+runs/<batch_id>/s<seed>/          ordinary run dir (meta/agents/ticks/summary/jev_calls, as above)
+runs/<batch_id>/batch_summary.json
+```
+
+`batch_summary.json` shape (built by `engine/batch.aggregate_batch`):
+
+```json
+{
+  "scenario": "base", "provider": "mock",
+  "seeds": [1, 2, 3], "succeeded_seeds": [1, 2, 3], "resumed_seeds": [],
+  "failed": [{"seed": 4, "error": "RuntimeError: ..."}],
+  "final_metrics": {
+    "<district_id>": {
+      "avg_rent": {"mean": ..., "std": ..., "min": ..., "max": ...},
+      "vacancy_rate": {...}, "unemployment_rate": {...}, "avg_satisfaction": {...},
+      "residents": {...}, "tourist_units": {...}, "shops_open": {...}, "online_share": {...},
+      "mode_share": {"metro": {"mean": ..., "std": ..., "min": ..., "max": ...}, "car": {...}, ...}
+    }
+  },
+  "series": {
+    "<district_id>": {
+      "avg_rent": [{"tick": 1, "mean": ..., "min": ..., "max": ...}, ...],
+      "avg_satisfaction": [...],
+      "mode_share.metro": [...], "mode_share.car": [...]
+    }
+  },
+  "usage_total": { "...": "Usage, summed via Usage.add over every succeeded seed" }
+}
+```
+
+`final_metrics`/`series` are computed only from seeds whose run finished (`succeeded_seeds`); a
+district or mode missing from one seed's run is treated as absent for that seed's data point
+(final metrics) or 0.0 share (mode_share only) rather than dropped from the aggregate. std is
+the population standard deviation (ddof=0) so a single-seed batch is well-defined (std=0).
+`compare_batches` reads two `batch_summary.json` payloads and, per district/metric, reports
+`effect = mean_B - mean_A` against `noise = sqrt((std_A^2 + std_B^2) / 2)`, flagging `clear` when
+`abs(effect) > 2 * noise` - a heuristic, not a significance test.
+
+Resume: `run_batch` skips (and marks `skipped=True` / lists under `resumed_seeds`) any seed
+whose `s<seed>/summary.json` already exists, so re-launching a crashed batch with the same
+`--batch-id` does not re-pay for finished seeds. Concurrency: seeds run as asyncio tasks in one
+process gated by `asyncio.Semaphore(parallel)`, not subprocesses; each run builds its own Jev
+backend, so its rate limiter is per-run, not shared - `--parallel P` against a real provider
+multiplies the effective request rate by up to P.
+
 ## Providers (jev/)
 
 `JEV_PROVIDER=mock|typesafe|openrouter|vercel` (env wins over `scenario.jev.provider`).

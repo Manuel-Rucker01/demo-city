@@ -3,7 +3,10 @@
 jevcity run --scenario PATH [--provider mock|typesafe|openrouter|vercel]
             [--replay-from CALLS.ndjson] [--batching quality|throughput]
             [--ticks N] [--agents N] [--seed N] [--out runs] [--run-id ID] [--yes]
+jevcity batch --scenario PATH --seeds N [--seed-start 1] [--parallel P]
+              [--provider P] [--agents N] [--ticks N] [--batch-id ID] [--out runs] [--yes]
 jevcity compare RUN_A RUN_B
+jevcity compare-batch BATCH_A BATCH_B [--metric NAME]
 jevcity export-web RUN_DIR... [--dest web/public/runs] [--geojson data/processed/districts.geojson]
 jevcity estimate --scenario PATH [--provider P] [--batching B]
 jevcity providers
@@ -22,6 +25,7 @@ from pathlib import Path
 import yaml
 
 from jevcity import jev
+from jevcity.engine import batch as engine_batch
 from jevcity.engine import loop as engine_loop
 from jevcity.runlog import reader as runlog_reader
 from jevcity.scenarios import loader as scenario_loader
@@ -30,6 +34,7 @@ from jevcity.types import Scenario
 _PROVIDER_CHOICES = ("mock", "typesafe", "openrouter", "vercel")
 _BATCHING_CHOICES = ("quality", "throughput")
 _ESTIMATE_PROBE_TICKS = 30
+_BATCH_MAX_PARALLEL = 4
 
 
 def _repo_root() -> Path:
@@ -59,11 +64,30 @@ def _build_parser() -> argparse.ArgumentParser:
     run_p.add_argument("--run-id")
     run_p.add_argument("--yes", action="store_true")
 
+    batch_p = sub.add_parser("batch", help="Run the same scenario at several seeds")
+    batch_p.add_argument("--scenario", required=True)
+    batch_p.add_argument("--seeds", type=int, required=True, help="number of seeds to run")
+    batch_p.add_argument("--seed-start", type=int, default=1)
+    batch_p.add_argument("--parallel", type=int, default=1, help=f"max {_BATCH_MAX_PARALLEL}")
+    batch_p.add_argument("--provider", choices=_PROVIDER_CHOICES)
+    batch_p.add_argument("--agents", type=int)
+    batch_p.add_argument("--ticks", type=int)
+    batch_p.add_argument("--batch-id")
+    batch_p.add_argument("--out", default="runs")
+    batch_p.add_argument("--yes", action="store_true")
+
     cmp_p = sub.add_parser("compare", help="Compare two finished runs")
     cmp_p.add_argument("run_a")
     cmp_p.add_argument("run_b")
 
-    exp_p = sub.add_parser("export-web", help="Copy run(s) into the web app's public/runs")
+    cmpb_p = sub.add_parser("compare-batch", help="Compare two finished batches")
+    cmpb_p.add_argument("batch_a")
+    cmpb_p.add_argument("batch_b")
+    cmpb_p.add_argument("--metric", help="only show rows for this metric (e.g. avg_rent)")
+
+    exp_p = sub.add_parser(
+        "export-web", help="Copy run(s) or batch dir(s) into the web app's public/runs"
+    )
     exp_p.add_argument("run_dirs", nargs="+")
     exp_p.add_argument("--dest", default="web/public/runs")
     exp_p.add_argument("--geojson", default="data/processed/districts.geojson")
@@ -189,6 +213,105 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_batch(args: argparse.Namespace) -> int:
+    if args.seeds < 1:
+        print("error: --seeds must be >= 1", file=sys.stderr)
+        return 2
+    if not (1 <= args.parallel <= _BATCH_MAX_PARALLEL):
+        print(f"error: --parallel must be between 1 and {_BATCH_MAX_PARALLEL}", file=sys.stderr)
+        return 2
+
+    scenario = scenario_loader.load_scenario(args.scenario)
+    if args.provider:
+        scenario.jev.provider = args.provider
+    if args.ticks is not None:
+        scenario.ticks = args.ticks
+    if args.agents is not None:
+        scenario.n_agents = args.agents
+
+    provider, settings = jev.resolve_provider(scenario.jev)
+    print(f"effective provider: {provider}")
+
+    if provider != "mock" and not scenario.jev.replay_from:
+        result = _estimate_scenario(scenario, provider, settings)
+        total_cost = result["total_cost"] * args.seeds
+        print(
+            f"estimated cost for '{scenario.name}' x {args.seeds} seeds over {scenario.ticks} "
+            f"ticks with provider={provider}: ${total_cost:.2f} "
+            f"(time/tick >= {result['time_per_tick']:.3f}s per run, binding={result['binding']}; "
+            f"--parallel {args.parallel} multiplies the effective request rate against this "
+            f"provider, since each concurrent run has its own rate limiter)"
+        )
+        if not args.yes:
+            print(
+                "Refusing to run a batch against a non-mock provider without --yes "
+                "(and no --replay-from was given).",
+                file=sys.stderr,
+            )
+            return 2
+
+    batch_id = args.batch_id or (
+        f"{scenario.name}-{provider}-batch-{datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+    )
+    batch_dir = Path(args.out) / batch_id
+    seeds = list(range(args.seed_start, args.seed_start + args.seeds))
+
+    results = asyncio.run(engine_batch.run_batch(scenario, batch_dir, seeds, parallel=args.parallel))
+
+    for r in results:
+        if r.error is not None:
+            print(f"  seed {r.seed}: FAILED - {r.error}", file=sys.stderr)
+        elif r.skipped:
+            print(f"  seed {r.seed}: resumed (summary.json already present)")
+        else:
+            print(f"  seed {r.seed}: ok -> {r.run_dir}")
+
+    runs_ticks = engine_batch.load_run_ticks(batch_dir, [r.seed for r in results if r.summary])
+    payload = engine_batch.aggregate_batch(scenario.name, provider, results, runs_ticks)
+    summary_path = engine_batch.write_batch_summary(batch_dir, payload)
+
+    n_ok = len(payload["succeeded_seeds"])
+    n_failed = len(payload["failed"])
+    print(
+        f"batch complete: {batch_dir}  {n_ok}/{len(seeds)} seeds ok, {n_failed} failed  "
+        f"summary={summary_path}"
+    )
+    return 1 if n_failed and not n_ok else 0
+
+
+def _cmd_compare_batch(args: argparse.Namespace) -> int:
+    summary_a = engine_batch.read_batch_summary(args.batch_a)
+    summary_b = engine_batch.read_batch_summary(args.batch_b)
+    if summary_a is None or summary_b is None:
+        print("both batches must have a batch_summary.json (i.e. be finished batches)", file=sys.stderr)
+        return 2
+
+    rows = engine_batch.compare_batches(summary_a, summary_b)
+    if args.metric:
+        rows = [r for r in rows if r["metric"] == args.metric]
+
+    print(
+        f"A: {args.batch_a} (seeds={summary_a.get('seeds')})\n"
+        f"B: {args.batch_b} (seeds={summary_b.get('seeds')})"
+    )
+    print(
+        "NOTE: 'clear' is a rough heuristic (|effect| > 2x pooled std across seeds), not a "
+        "formal significance test; with few seeds treat it as a signal, not proof."
+    )
+    label_w, val_w = 34, 12
+    print(f"{'district.metric':<{label_w}}{'mean_A':>{val_w}}{'mean_B':>{val_w}}"
+          f"{'effect':>{val_w}}{'noise':>{val_w}}  clear")
+    print("-" * (label_w + 4 * val_w + 8))
+    for row in rows:
+        label = f"{row['district']}.{row['metric']}"
+        print(
+            f"{label:<{label_w}}{row['mean_a']:>{val_w}.3f}{row['mean_b']:>{val_w}.3f}"
+            f"{row['effect']:>{val_w}.3f}{row['noise']:>{val_w}.3f}  "
+            f"{'CLEAR' if row['clear'] else '-'}"
+        )
+    return 0
+
+
 def _fmt(value, width, prec=None) -> str:
     if isinstance(value, float) and prec is not None:
         return f"{value:>{width}.{prec}f}"
@@ -265,6 +388,25 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     return 0
 
 
+def _expand_run_dirs(run_dir_strs: list[str]) -> list[Path]:
+    """Expand any batch dir (one with a batch_summary.json) into its per-seed run dirs, so
+    `export-web` given a batch shows every seed's run individually (the web has no notion of a
+    batch yet; each seed just becomes one more entry in index.json). Plain run dirs pass
+    through unchanged."""
+    expanded: list[Path] = []
+    for run_dir_str in run_dir_strs:
+        run_dir = Path(run_dir_str)
+        batch_summary = engine_batch.read_batch_summary(run_dir)
+        if batch_summary is not None:
+            for seed in batch_summary.get("seeds", []):
+                seed_dir = engine_batch.seed_run_dir(run_dir, seed)
+                if (seed_dir / "meta.json").exists():
+                    expanded.append(seed_dir)
+        else:
+            expanded.append(run_dir)
+    return expanded
+
+
 def _cmd_export_web(args: argparse.Namespace) -> int:
     dest_root = Path(args.dest)
     dest_root.mkdir(parents=True, exist_ok=True)
@@ -275,8 +417,12 @@ def _cmd_export_web(args: argparse.Namespace) -> int:
         for entry in json.loads(index_path.read_text(encoding="utf-8")):
             index_by_id[entry["run_id"]] = entry
 
-    for run_dir_str in args.run_dirs:
-        run_dir = Path(run_dir_str)
+    batch_dirs = [
+        Path(s) for s in args.run_dirs if engine_batch.read_batch_summary(Path(s)) is not None
+    ]
+    run_dirs = _expand_run_dirs(args.run_dirs)
+
+    for run_dir in run_dirs:
         reader = runlog_reader.RunReader(run_dir)
         meta = reader.meta()
         summary = reader.summary()
@@ -299,6 +445,11 @@ def _cmd_export_web(args: argparse.Namespace) -> int:
 
     index_path.write_text(json.dumps(list(index_by_id.values()), indent=2), encoding="utf-8")
 
+    for batch_dir in batch_dirs:
+        batch_out = dest_root / batch_dir.name
+        batch_out.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(batch_dir / "batch_summary.json", batch_out / "batch_summary.json")
+
     geojson_src = Path(args.geojson)
     if geojson_src.exists():
         geo_dest = Path("web/public/data/districts.geojson")
@@ -307,7 +458,9 @@ def _cmd_export_web(args: argparse.Namespace) -> int:
     else:
         print(f"note: geojson {geojson_src} not found, skipped", file=sys.stderr)
 
-    print(f"exported {len(args.run_dirs)} run(s) to {dest_root}")
+    print(
+        f"exported {len(run_dirs)} run(s) and {len(batch_dirs)} batch summary(ies) to {dest_root}"
+    )
     return 0
 
 
@@ -354,7 +507,9 @@ def _cmd_providers(_args: argparse.Namespace) -> int:
 
 _COMMANDS = {
     "run": _cmd_run,
+    "batch": _cmd_batch,
     "compare": _cmd_compare,
+    "compare-batch": _cmd_compare_batch,
     "export-web": _cmd_export_web,
     "estimate": _cmd_estimate,
     "providers": _cmd_providers,

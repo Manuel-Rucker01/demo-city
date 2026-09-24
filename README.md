@@ -49,6 +49,42 @@ A 1,000-agent, 365-day run takes about 2.5 s in mock mode.
 Recording for video: `?record=1&run=base-mock&compare=rent_cap_gracia-mock&speed=4` at 1920×1080
 (see `web/README.md`).
 
+## Multi-seed batches
+
+With 1,000 agents (~130–290 per district), a single run's differences can easily be noise, not
+policy effect (see [Limitations](#limitations)). `jevcity batch` runs the same scenario at
+several seeds and reports mean/std/min/max per district, so you can tell a real effect from
+seed-to-seed variance:
+
+```bash
+uv run jevcity batch --scenario scenarios/base.yaml --seeds 5 --batch-id base-batch
+uv run jevcity batch --scenario scenarios/rent_cap_gracia.yaml --seeds 5 --batch-id rent_cap-batch
+uv run jevcity compare-batch runs/base-batch runs/rent_cap-batch
+```
+
+Each seed lands in its own ordinary run directory, `runs/<batch-id>/s<seed>/`, readable by
+`jevcity compare`/`export-web` like any other run. `runs/<batch-id>/batch_summary.json` holds
+the cross-seed aggregates: per-district final-metric mean/std/min/max (including per-mode
+`mode_share`), per-tick time series (mean/min/max) for `avg_rent`, `avg_satisfaction` and
+`mode_share` per mode, and total `usage` summed over every seed.
+
+`--seeds N [--seed-start 1]` picks the seed range (`seed_start .. seed_start+N-1`). `--parallel P`
+(1–4, default 1) runs up to P seeds concurrently as asyncio tasks in the same process (not
+subprocesses). Each concurrent run builds its own Jev backend/rate limiter, so **`--parallel P`
+against a paid provider multiplies the effective request rate by up to P** - the batch's
+pre-flight cost estimate says so, and `--yes` is required exactly like `run`. A batch can be
+re-launched after a crash: any seed whose `summary.json` already exists is skipped, not re-run.
+A seed that fails does not stop the others; failures are listed in `batch_summary.json["failed"]`.
+
+`jevcity compare-batch BATCH_A BATCH_B [--metric NAME]` prints, per district and metric,
+`effect = mean_B - mean_A` against `noise = pooled std` (`sqrt((std_A² + std_B²) / 2)`), flagging
+`CLEAR` when `|effect| > 2 x noise`. This is a rough heuristic, not a formal significance test -
+with 3 seeds especially, read it as a signal to investigate, not a verdict.
+
+`jevcity export-web` accepts a batch directory in place of (or alongside) run directories: it
+expands it to each seed's run (so the web can show one representative run at a time) and copies
+`batch_summary.json` to `web/public/runs/<batch-id>/` for later use (e.g. uncertainty bands).
+
 ## Providers
 
 Jev is available directly and through two gateways. Pick one with `JEV_PROVIDER` (or
