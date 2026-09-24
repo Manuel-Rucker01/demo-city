@@ -1,6 +1,7 @@
 """Run log writer. Owner: T7. Layout (docs/CONTRACTS.md):
-runs/<run_id>/meta.json, agents.json, ticks.ndjson, jev_calls.ndjson, summary.json"""
+runs/<run_id>/meta.json, agents.json, ticks.ndjson, jev_calls.ndjson.gz, summary.json"""
 
+import gzip
 from pathlib import Path
 from types import TracebackType
 from typing import Self
@@ -8,7 +9,7 @@ from typing import Self
 from jevcity.types import AgentSnapshot, CallRecord, RunMeta, RunSummary, TickRecord
 
 _TICKS_FILE = "ticks.ndjson"
-_CALLS_FILE = "jev_calls.ndjson"
+_CALLS_FILE = "jev_calls.ndjson.gz"  # gzip: ~10x smaller (repeated question text)
 _META_FILE = "meta.json"
 _AGENTS_FILE = "agents.json"
 _SUMMARY_FILE = "summary.json"
@@ -45,7 +46,7 @@ class RunWriter:
 
     def _calls(self):
         if self._calls_fh is None:
-            self._calls_fh = open(self.run_dir / _CALLS_FILE, "a", encoding="utf-8")  # noqa: SIM115
+            self._calls_fh = gzip.open(self.run_dir / _CALLS_FILE, "at", encoding="utf-8")  # noqa: SIM115
         return self._calls_fh
 
     def write_meta(self, meta: RunMeta) -> None:
@@ -60,12 +61,15 @@ class RunWriter:
         fh.write(rec.model_dump_json())
         fh.write("\n")
         fh.flush()
+        if self._calls_fh is not None:
+            # Sync-flush the gzip stream once per tick (not per call, which would ruin the
+            # compression): a crash loses at most the current tick's calls.
+            self._calls_fh.flush()
 
     def write_call(self, rec: CallRecord) -> None:
         fh = self._calls()
         fh.write(rec.model_dump_json())
         fh.write("\n")
-        fh.flush()
 
     def write_summary(self, summary: RunSummary) -> None:
         (self.run_dir / _SUMMARY_FILE).write_text(

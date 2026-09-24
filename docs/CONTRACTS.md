@@ -39,7 +39,7 @@ same Jev answers => identical run.
 runs/<run_id>/meta.json          RunMeta
 runs/<run_id>/agents.json        list[AgentSnapshot]   (initial population)
 runs/<run_id>/ticks.ndjson       one TickRecord per line
-runs/<run_id>/jev_calls.ndjson   one CallRecord per line (replay cache)
+runs/<run_id>/jev_calls.ndjson.gz   one CallRecord per line (replay cache)
 runs/<run_id>/summary.json       RunSummary (written at the end)
 ```
 
@@ -71,7 +71,7 @@ context size, fallback price, TODOs) come from `config/providers.yaml`; scenario
   estimated as len(canonical JSON body)/4, cost estimated at the `mock_as` provider's price,
   `Usage.estimated=True`.
 - Replay (`jev.replay_from`): answers looked up by `cache_key` in a previous
-  `jev_calls.ndjson`; a miss is an error (never falls back to the network).
+  `jev_calls.ndjson.gz`; a miss is an error (never falls back to the network).
 - Every response's `model` (exact version reported) is kept in `CallRecord.resolved_model` and
   counted in `Usage.models_seen`; the engine warns if it changes mid-run.
 - Rate limiting: token buckets for rpm and input tokens/s at `rate_safety` x configured limits,

@@ -275,7 +275,7 @@ class JevConfig(BaseModel):
     timeout_s: float = 10.0
     decision_policy: Literal["sample", "argmax", "gate"] = "sample"  # how a Choice becomes an action
     confidence_threshold: float = 0.35  # only for decision_policy "gate": below -> STAY
-    replay_from: str | None = None  # runs/<id>/jev_calls.ndjson -> answers come from the log
+    replay_from: str | None = None  # runs/<id>/jev_calls.ndjson.gz -> answers come from the log
     max_cost_usd: float = 5.0  # hard stop for paid providers
 
 
@@ -313,7 +313,7 @@ class Usage(BaseModel):
 
 
 class CallRecord(BaseModel):
-    """One line of runs/<id>/jev_calls.ndjson. Enough to replay without calling any provider."""
+    """One line of runs/<id>/jev_calls.ndjson.gz. Enough to replay without calling any provider."""
 
     tick: int
     request_id: str

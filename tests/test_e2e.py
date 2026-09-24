@@ -76,7 +76,7 @@ def test_full_stack_run_mock_200_agents_20_ticks(e2e_scenario, tmp_path):
     assert reader.summary() is not None
     assert (run_dir / "meta.json").exists()
     assert (run_dir / "agents.json").exists()
-    assert (run_dir / "jev_calls.ndjson").exists()
+    assert (run_dir / "jev_calls.ndjson.gz").exists()
     assert (run_dir / "summary.json").exists()
 
 
@@ -84,9 +84,9 @@ def test_replay_from_jev_calls_reproduces_the_same_simulation(e2e_scenario, tmp_
     run_dir = tmp_path / "run_live"
     _run_or_skip(e2e_scenario, run_dir)
 
-    calls_path = run_dir / "jev_calls.ndjson"
+    calls_path = run_dir / "jev_calls.ndjson.gz"
     if not calls_path.exists():
-        pytest.skip("no jev_calls.ndjson written (mock backend not wired up yet)")
+        pytest.skip("no jev_calls.ndjson.gz written (mock backend not wired up yet)")
 
     replay_scenario = e2e_scenario.model_copy(deep=True)
     replay_scenario.jev = replay_scenario.jev.model_copy(update={"replay_from": str(calls_path)})

@@ -283,3 +283,18 @@ def test_agents_json_is_valid_json_list(tmp_path):
     data = json.loads(raw)
     assert isinstance(data, list)
     assert len(data) == 3
+
+
+def test_calls_are_gzipped_and_survive_truncation(tmp_path):
+    run_dir = tmp_path / "run"
+    with RunWriter(run_dir) as w:
+        for i in range(50):
+            w.write_call(make_call_record(1, f"r{i}", f"k{i}"))
+    path = run_dir / "jev_calls.ndjson.gz"
+    assert path.exists() and not (run_dir / "jev_calls.ndjson").exists()
+    assert len(list(RunReader(run_dir).calls())) == 50
+
+    data = path.read_bytes()
+    path.write_bytes(data[: len(data) - 40])  # simulate a crash mid-stream
+    calls = list(RunReader(run_dir).calls())
+    assert 0 < len(calls) <= 50

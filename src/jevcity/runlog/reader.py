@@ -1,5 +1,6 @@
 """Run log reader. Owner: T7."""
 
+import gzip
 import json
 import logging
 from collections.abc import Iterator
@@ -10,15 +11,31 @@ from jevcity.types import AgentSnapshot, CallRecord, JevResponse, RunMeta, RunSu
 logger = logging.getLogger(__name__)
 
 _TICKS_FILE = "ticks.ndjson"
-_CALLS_FILE = "jev_calls.ndjson"
+_CALLS_FILES = ("jev_calls.ndjson.gz", "jev_calls.ndjson")  # new, legacy
 _META_FILE = "meta.json"
 _AGENTS_FILE = "agents.json"
 _SUMMARY_FILE = "summary.json"
 
 
+def _read_lines(path: Path) -> list[str]:
+    """All lines of a plain or gzipped NDJSON file. A gzip stream cut short by a crash raises
+    EOFError at the end: keep what was decoded and let the truncated-last-line logic below deal
+    with a partial final record."""
+    if path.suffix != ".gz":
+        with open(path, encoding="utf-8") as fh:
+            return fh.readlines()
+    lines: list[str] = []
+    try:
+        with gzip.open(path, "rt", encoding="utf-8") as fh:
+            for line in fh:
+                lines.append(line)  # noqa: PERF402 - keep lines read before an EOFError
+    except EOFError:
+        logger.warning("%s: gzip stream truncated; using %d complete lines", path, len(lines))
+    return lines
+
+
 def _iter_ndjson_lines(path: Path) -> Iterator[str]:
-    with open(path, encoding="utf-8") as fh:
-        lines = fh.readlines()
+    lines = _read_lines(path)
     for i, line in enumerate(lines):
         line = line.strip()
         if not line:
@@ -57,8 +74,10 @@ class RunReader:
             yield TickRecord.model_validate_json(line)
 
     def calls(self) -> Iterator[CallRecord]:
-        path = self.run_dir / _CALLS_FILE
-        if not path.exists():
+        path = next(
+            (self.run_dir / n for n in _CALLS_FILES if (self.run_dir / n).exists()), None
+        )
+        if path is None:
             return
         for line in _iter_ndjson_lines(path):
             yield CallRecord.model_validate_json(line)

@@ -6,6 +6,7 @@ request whose `cache_key` was not recorded is an error -- replay never falls bac
 
 from __future__ import annotations
 
+import gzip
 import json
 from collections.abc import Sequence
 from pathlib import Path
@@ -27,7 +28,11 @@ from .meter import UsageMeter, usage_from_response
 
 def load_call_records(path: str) -> list[CallRecord]:
     records = []
-    with Path(path).open("r", encoding="utf-8") as f:
+    p = Path(path)
+    if not p.exists() and Path(f"{path}.gz").exists():
+        p = Path(f"{path}.gz")
+    opener = gzip.open if p.suffix == ".gz" else open
+    with opener(p, "rt", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
             if not line:
