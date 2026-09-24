@@ -227,3 +227,105 @@ def test_full_stack_run_mock_300_agents_40_ticks_10_districts(e2e_scenario_10_di
             assert did in all_ids
 
     assert reader.summary() is not None
+
+
+# --- rental supply: full-stack run with landlord decisions enabled ----------------------------
+
+
+@pytest.fixture
+def e2e_scenario_rental_supply(tmp_path) -> Scenario:
+    """Like e2e_scenario_10_districts but with rental_supply.enabled=True, long enough (60
+    ticks, 150 agents) to plausibly see lease turnover -> vacancies -> landlord decisions, per
+    the base_2y.yaml scenario's shape."""
+    districts_path = tmp_path / "districts_10_rental.json"
+    _write_10_district_json(districts_path)
+    scenario = Scenario(
+        name="e2e-rental-supply",
+        seed=99,
+        ticks=60,
+        n_agents=150,
+        data_path=str(districts_path),
+        jev=JevConfig(provider="mock", agents_per_request=1, confidence_threshold=0.35),
+    )
+    scenario.rental_supply.enabled = True
+    return scenario
+
+
+def test_full_stack_run_mock_rental_supply_150_agents_60_ticks(
+    e2e_scenario_rental_supply, tmp_path
+):
+    run_dir = tmp_path / "run"
+    summary = _run_or_skip(e2e_scenario_rental_supply, run_dir)
+
+    assert summary.ticks == 60
+    reader = RunReader(run_dir)
+    ticks = list(reader.ticks())
+    assert len(ticks) == 60
+
+    # Every rental-supply DistrictSnapshot field must be present and well-formed on every tick,
+    # regardless of exactly how much landlord/construction activity happened this run.
+    for t in ticks:
+        for d in t.districts:
+            assert d.owner_units >= 0
+            assert d.rental_units >= 0
+            assert d.seasonal_units >= 0
+            assert -1e-9 <= d.rental_vacancy_rate <= 1.0 + 1e-9
+            assert 0.0 <= d.quality <= 1.0
+            assert d.new_units_completed >= 0
+            assert -1e-9 <= d.below_market_share <= 1.0 + 1e-9
+        for kind, count in t.landlord_actions_by_kind.items():
+            assert kind in {"relet", "sell", "seasonal", "renovate"}
+            assert count >= 0
+
+    # At 150 agents over 60 ticks (2 months) with rental_supply on, at least one lease turnover
+    # -> landlord decision round should have happened: a request_id containing "landlord" in
+    # the call log is a solid, collaborator-independent proxy for "the second round of Jev
+    # calls actually fired".
+    calls = list(reader.calls())
+    assert any("landlord" in c.request_id for c in calls)
+
+    assert reader.summary() is not None
+
+
+def test_replay_from_jev_calls_reproduces_rental_supply_run_including_landlord_calls(
+    e2e_scenario_rental_supply, tmp_path
+):
+    """Same determinism guarantee as test_replay_from_jev_calls_reproduces_the_same_simulation,
+    but for a run with rental_supply.enabled=True: the replay backend must also serve the
+    landlord-kind requests recorded in jev_calls.ndjson.gz (cache_key is {state, questions}
+    only, so `kind` doesn't need special handling - see docs/CONTRACTS.md's "Rental supply"
+    section)."""
+    run_dir = tmp_path / "run_live"
+    _run_or_skip(e2e_scenario_rental_supply, run_dir)
+
+    calls_path = run_dir / "jev_calls.ndjson.gz"
+    if not calls_path.exists():
+        pytest.skip("no jev_calls.ndjson.gz written (mock backend not wired up yet)")
+
+    live_calls = list(RunReader(run_dir).calls())
+    if not any("landlord" in c.request_id for c in live_calls):
+        pytest.skip("no landlord calls happened this run/seed - nothing rental-supply-specific to replay")
+
+    replay_scenario = e2e_scenario_rental_supply.model_copy(deep=True)
+    replay_scenario.jev = replay_scenario.jev.model_copy(update={"replay_from": str(calls_path)})
+
+    run_dir_replay = tmp_path / "run_replay"
+    _run_or_skip(replay_scenario, run_dir_replay)
+
+    live_lines = (run_dir / "ticks.ndjson").read_text(encoding="utf-8").splitlines()
+    replay_lines = (run_dir_replay / "ticks.ndjson").read_text(encoding="utf-8").splitlines()
+    assert len(live_lines) == len(replay_lines) == 60
+
+    compared_fields = (
+        "tick", "date", "districts", "events_by_kind", "actions_by_kind",
+        "gated_decisions", "moves", "changes", "landlord_actions_by_kind",
+    )
+    for live_line, replay_line in zip(live_lines, replay_lines, strict=True):
+        live = json.loads(live_line)
+        replay = json.loads(replay_line)
+        for field in compared_fields:
+            assert live[field] == replay[field], f"tick {live['tick']} field {field!r} differs"
+
+    replay_calls = list(RunReader(run_dir_replay).calls())
+    assert any("landlord" in c.request_id for c in replay_calls)
+    assert all(c.replayed for c in replay_calls)

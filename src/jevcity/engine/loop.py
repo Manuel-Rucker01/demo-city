@@ -225,10 +225,62 @@ async def run_simulation(
                 daily_changes = daily_delta.changes
                 new_arrivals = daily_delta.arrivals
                 new_departures = daily_delta.departures
+                daily_vacancies = daily_delta.vacancies
             else:
                 daily_changes = market.daily_update(world, agents_by_id, scenario, tick, rng)
                 new_arrivals = []
                 new_departures = []
+                daily_vacancies = []
+
+            # Rental-supply landlord decisions: a SECOND round of Jev calls in the same tick,
+            # only when scenario.rental_supply.enabled and at least one long-term rental unit
+            # was freed this tick (from either apply_decisions' or daily_update_ex's TickDelta).
+            # Collaborators (prompts.state_builder.build_landlord_requests,
+            # prompts.parse.parse_landlord_decisions, market.apply_landlord_decisions) are
+            # looked up with getattr so this engine works whether or not they've landed yet -
+            # see docs/CONTRACTS.md.
+            landlord_actions_by_kind: dict[str, int] = {}
+            if scenario.rental_supply.enabled:
+                vacancies = [*delta.vacancies, *daily_vacancies]
+                if vacancies:
+                    build_landlord_requests = getattr(
+                        state_builder, "build_landlord_requests", None
+                    )
+                    landlord_reqs = (
+                        build_landlord_requests(world, vacancies, scenario, tick)
+                        if build_landlord_requests is not None
+                        else []
+                    )
+                    if landlord_reqs:
+                        try:
+                            landlord_responses = await backend.evaluate_many(landlord_reqs)
+                        except BaseException as exc:
+                            if _is_budget_exceeded(exc):
+                                msg = f"stopped early at tick {tick}: {exc}"
+                                logger.warning(msg)
+                                warnings_list.append(msg)
+                                break
+                            raise
+                        parse_landlord_decisions = getattr(
+                            decision_parse, "parse_landlord_decisions", None
+                        )
+                        landlord_decisions = (
+                            parse_landlord_decisions(
+                                landlord_reqs,
+                                landlord_responses,
+                                scenario.jev.decision_policy,
+                                scenario.seed,
+                            )
+                            if parse_landlord_decisions is not None
+                            else []
+                        )
+                        apply_landlord_decisions = getattr(
+                            market, "apply_landlord_decisions", None
+                        )
+                        if apply_landlord_decisions is not None and landlord_decisions:
+                            landlord_actions_by_kind = apply_landlord_decisions(
+                                world, landlord_decisions, scenario, rng, tick
+                            )
 
             # daily_update_ex owns adding new agents to world/market state; agents_by_id is
             # only mutated here if it hasn't been already (idempotent either way).
@@ -280,6 +332,7 @@ async def run_simulation(
                 usage_tick=usage_tick,
                 usage_total=usage_after,
                 arrivals=[_agent_snapshot(a) for a in new_arrivals],
+                landlord_actions_by_kind=landlord_actions_by_kind,
                 departures=departure_ids,
             )
             writer.write_tick(tick_record)

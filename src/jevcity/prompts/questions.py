@@ -27,9 +27,12 @@ from jevcity.types import (
     DistrictId,
     Event,
     EventKind,
+    LandlordAction,
+    LandlordType,
     Occupation,
     ShoppingPlace,
     Tenure,
+    Vacancy,
     World,
 )
 
@@ -165,6 +168,29 @@ def shopping_place_question(*, person_ref: str | None = None) -> dict:
         "type": "choice",
         "instructions": instructions,
         "criteria": dict(SHOPPING_PLACE_CRITERIA),
+    }
+
+
+# --- landlord question ----------------------------------------------------------------------
+
+LANDLORD_INSTRUCTIONS = "What will this landlord most likely do with the empty flat?"
+
+LANDLORD_CRITERIA: dict[str, str] = {
+    LandlordAction.RELET: (
+        "Rent the flat again long-term to a new tenant, at market rent or the capped rent "
+        "if one applies."
+    ),
+    LandlordAction.SELL: "Sell the flat to an owner-occupier, leaving the long-term rental market for good.",
+    LandlordAction.SEASONAL: "Switch the flat to short-term/seasonal lets instead of a long-term tenant.",
+    LandlordAction.RENOVATE: "Take the flat off the market for renovation, then relet it later.",
+}
+
+
+def landlord_question() -> dict:
+    return {
+        "type": "choice",
+        "instructions": LANDLORD_INSTRUCTIONS,
+        "criteria": dict(LANDLORD_CRITERIA),
     }
 
 
@@ -309,3 +335,42 @@ def _shopping_place_weights() -> dict[str, float]:
 def _triangular_weights(n: int, target: int) -> list[float]:
     target = max(0, min(n - 1, target))
     return [max(0.1, 1.0 - abs(i - target) * 0.4) for i in range(n)]
+
+
+# --- landlord mock priors --------------------------------------------------------------------
+
+LANDLORD_BASE_WEIGHTS: dict[LandlordAction, float] = {
+    LandlordAction.RELET: 6.0,
+    LandlordAction.SELL: 0.3,
+    LandlordAction.SEASONAL: 0.3,
+    LandlordAction.RENOVATE: 0.3,
+}
+LANDLORD_CAP_GAP_THRESHOLD = 0.10  # cap must bite by more than this share of market rent
+LANDLORD_LOW_QUALITY_THRESHOLD = 0.5
+
+
+def mock_priors_for_landlord(vacancy: Vacancy, world: World) -> dict[str, float]:
+    """Heuristic mock-backend weights for the landlord_action question.
+
+    Relet dominates by default (most Barcelona vacancies get relet). A rent cap that bites
+    hard (gap to market > LANDLORD_CAP_GAP_THRESHOLD) shifts weight away from relet: small
+    landlords lean toward selling (a single flat is easier to sell than to run as a seasonal
+    let), large landlords lean toward seasonal (a portfolio can absorb the switch, and
+    seasonal often escapes the cap -- see RentalSupplyParams.seasonal_capped). Poor flat
+    condition (low DistrictState.quality) shifts weight toward renovate.
+    """
+    state = world.states[vacancy.district]
+    market_rent = state.avg_rent
+    w = dict(LANDLORD_BASE_WEIGHTS)
+    if state.rent_cap is not None and market_rent > 0 and state.rent_cap < market_rent:
+        gap = (market_rent - state.rent_cap) / market_rent
+        if gap > LANDLORD_CAP_GAP_THRESHOLD:
+            if vacancy.landlord_type is LandlordType.LARGE:
+                w[LandlordAction.SEASONAL] += 2.5 * gap
+                w[LandlordAction.SELL] += 1.0 * gap
+            else:
+                w[LandlordAction.SELL] += 2.5 * gap
+                w[LandlordAction.SEASONAL] += 1.0 * gap
+    if state.quality < LANDLORD_LOW_QUALITY_THRESHOLD:
+        w[LandlordAction.RENOVATE] += (LANDLORD_LOW_QUALITY_THRESHOLD - state.quality) * 4.0
+    return {k.value: v for k, v in w.items()}

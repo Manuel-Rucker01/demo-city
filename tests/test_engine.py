@@ -28,12 +28,16 @@ from jevcity.types import (
     JevConfig,
     JevResponse,
     JevUsage,
+    LandlordAction,
+    LandlordDecision,
+    LandlordType,
     MoveRecord,
     ProviderSettings,
     Scenario,
     Tenure,
     TickDelta,
     Usage,
+    Vacancy,
 )
 
 
@@ -598,3 +602,267 @@ async def test_max_districts_in_state_passed_when_build_requests_accepts_it(tmp_
     await engine_loop.run_simulation(scenario, run_dir, backend=backend)
 
     assert captured["max_districts_in_state"] == 3
+
+
+# --- rental supply: landlord decisions (second Jev round) -------------------------------------
+
+
+class _OrderedFakeBackend:
+    """Like FakeBackend but keyed by call ORDER, not tick - the landlord round is a second
+    `evaluate_many` call within the same tick, so ticks alone can't disambiguate."""
+
+    def __init__(self, responses_by_call, usage_by_call):
+        self.provider = "mock"
+        self.settings = _settings()
+        self._responses_by_call = responses_by_call
+        self._usage_by_call = usage_by_call
+        self._current_usage = Usage()
+        self.calls: list[list[str]] = []
+        self.closed = False
+
+    async def evaluate_many(self, reqs):
+        idx = len(self.calls)
+        self.calls.append([r.request_id for r in reqs])
+        self._current_usage = self._usage_by_call[idx]
+        return self._responses_by_call[idx]
+
+    def usage(self) -> Usage:
+        return self._current_usage
+
+    async def aclose(self) -> None:
+        self.closed = True
+
+
+def _vacancy(vacancy_id: int = 1, tick: int = 1, district: str = "d1") -> Vacancy:
+    return Vacancy(
+        vacancy_id=vacancy_id, tick=tick, district=district, landlord_type=LandlordType.SMALL,
+        last_rent=900.0, tenant_years=2.0,
+    )
+
+
+def _landlord_req(tick: int = 1) -> DecisionRequest:
+    return DecisionRequest(
+        request_id=f"t{tick}-landlord-r0", tick=tick, agent_ids=[1], kind="landlord",
+        state={}, questions={},
+    )
+
+
+def _landlord_decision(vacancy_id: int = 1, tick: int = 1) -> LandlordDecision:
+    return LandlordDecision(
+        vacancy_id=vacancy_id, tick=tick, district="d1", action=LandlordAction.RELET,
+        confidence=0.9,
+    )
+
+
+def _rental_scenario(ticks: int = 1, enabled: bool = True) -> Scenario:
+    scenario = _scenario(ticks=ticks)
+    scenario.rental_supply.enabled = enabled
+    return scenario
+
+
+def _one_tick_harness(monkeypatch, *, delta_by_tick):
+    events_by_tick = {1: [Event(agent_id=1, kind=EventKind.PAYDAY)]}
+    req1 = DecisionRequest(request_id="t1-r0", tick=1, agent_ids=[1], state={}, questions={})
+    requests_by_tick = {1: [req1]}
+    decisions_by_tick = {1: []}
+    return _Harness(
+        monkeypatch,
+        events_by_tick=events_by_tick,
+        requests_by_tick=requests_by_tick,
+        decisions_by_tick=decisions_by_tick,
+        delta_by_tick=delta_by_tick,
+    )
+
+
+@pytest.mark.asyncio
+async def test_landlord_round_fires_when_enabled_with_vacancies_and_is_counted_in_usage(
+    tmp_path, monkeypatch
+):
+    delta_by_tick = {1: TickDelta(moves=[], changes=[], vacancies=[_vacancy()])}
+    _one_tick_harness(monkeypatch, delta_by_tick=delta_by_tick)
+
+    landlord_req = _landlord_req()
+    build_calls: list = []
+    apply_calls: list = []
+
+    def fake_build_landlord_requests(world, vacancies, scenario, tick):
+        build_calls.append((list(vacancies), tick))
+        return [landlord_req]
+
+    def fake_parse_landlord_decisions(reqs, responses, policy, seed):
+        assert [r.request_id for r in reqs] == [landlord_req.request_id]
+        return [_landlord_decision()]
+
+    def fake_apply_landlord_decisions(world, decisions, scenario, rng, tick):
+        apply_calls.append((decisions, tick))
+        return {"relet": 1}
+
+    monkeypatch.setattr(
+        engine_loop.state_builder, "build_landlord_requests", fake_build_landlord_requests,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        engine_loop.decision_parse, "parse_landlord_decisions", fake_parse_landlord_decisions,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        engine_loop.market, "apply_landlord_decisions", fake_apply_landlord_decisions,
+        raising=False,
+    )
+
+    usage_resident = Usage(requests=1, input_tokens=10, models_seen={"m": 1})
+    usage_landlord = Usage(requests=2, input_tokens=25, models_seen={"m": 1})
+    backend = _OrderedFakeBackend(
+        responses_by_call=[[_resp("m")], [_resp("m")]],
+        usage_by_call=[usage_resident, usage_landlord],
+    )
+
+    scenario = _rental_scenario()
+    run_dir = tmp_path / "run_landlord"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    # two evaluate_many calls this tick: resident round then landlord round
+    assert backend.calls == [["t1-r0"], [landlord_req.request_id]]
+    assert build_calls == [([_vacancy()], 1)]
+    assert len(apply_calls) == 1
+
+    reader = RunReader(run_dir)
+    (t1,) = list(reader.ticks())
+    assert t1.landlord_actions_by_kind == {"relet": 1}
+    # usage_tick reflects BOTH rounds (cumulative usage after the landlord round minus before)
+    assert t1.usage_tick.requests == 2
+    assert t1.usage_tick.input_tokens == 25
+
+
+@pytest.mark.asyncio
+async def test_landlord_round_skipped_when_rental_supply_disabled(tmp_path, monkeypatch):
+    delta_by_tick = {1: TickDelta(moves=[], changes=[], vacancies=[_vacancy()])}
+    _one_tick_harness(monkeypatch, delta_by_tick=delta_by_tick)
+
+    def _must_not_be_called(*a, **kw):
+        raise AssertionError("build_landlord_requests must not be called when disabled")
+
+    monkeypatch.setattr(
+        engine_loop.state_builder, "build_landlord_requests", _must_not_be_called, raising=False
+    )
+
+    usage_resident = Usage(requests=1, models_seen={"m": 1})
+    backend = _OrderedFakeBackend(
+        responses_by_call=[[_resp("m")]], usage_by_call=[usage_resident]
+    )
+
+    scenario = _rental_scenario(enabled=False)
+    run_dir = tmp_path / "run_disabled"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    assert backend.calls == [["t1-r0"]]  # only the resident round
+    reader = RunReader(run_dir)
+    (t1,) = list(reader.ticks())
+    assert t1.landlord_actions_by_kind == {}
+
+
+@pytest.mark.asyncio
+async def test_landlord_round_skipped_when_enabled_but_no_vacancies(tmp_path, monkeypatch):
+    _one_tick_harness(monkeypatch, delta_by_tick={})  # default TickDelta() -> vacancies=[]
+
+    def _must_not_be_called(*a, **kw):
+        raise AssertionError("build_landlord_requests must not be called with no vacancies")
+
+    monkeypatch.setattr(
+        engine_loop.state_builder, "build_landlord_requests", _must_not_be_called, raising=False
+    )
+
+    usage_resident = Usage(requests=1, models_seen={"m": 1})
+    backend = _OrderedFakeBackend(
+        responses_by_call=[[_resp("m")]], usage_by_call=[usage_resident]
+    )
+
+    scenario = _rental_scenario()
+    run_dir = tmp_path / "run_no_vacancies"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    assert backend.calls == [["t1-r0"]]
+
+
+@pytest.mark.asyncio
+async def test_landlord_round_falls_back_gracefully_when_collaborators_missing(
+    tmp_path, monkeypatch
+):
+    """Enabled + vacancies present, but none of the rental-supply collaborators have landed
+    yet: the engine must not crash, just skip the landlord round entirely."""
+    delta_by_tick = {1: TickDelta(moves=[], changes=[], vacancies=[_vacancy()])}
+    _one_tick_harness(monkeypatch, delta_by_tick=delta_by_tick)
+
+    monkeypatch.delattr(engine_loop.state_builder, "build_landlord_requests", raising=False)
+    monkeypatch.delattr(engine_loop.decision_parse, "parse_landlord_decisions", raising=False)
+    monkeypatch.delattr(engine_loop.market, "apply_landlord_decisions", raising=False)
+
+    usage_resident = Usage(requests=1, models_seen={"m": 1})
+    backend = _OrderedFakeBackend(
+        responses_by_call=[[_resp("m")]], usage_by_call=[usage_resident]
+    )
+
+    scenario = _rental_scenario()
+    run_dir = tmp_path / "run_missing_collaborators"
+
+    await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    assert backend.calls == [["t1-r0"]]  # no landlord evaluate_many call
+    reader = RunReader(run_dir)
+    (t1,) = list(reader.ticks())
+    assert t1.landlord_actions_by_kind == {}
+
+
+@pytest.mark.asyncio
+async def test_disabled_rental_supply_produces_identical_tick_records_regardless_of_collaborators(
+    tmp_path, monkeypatch
+):
+    """The disabled path must be byte-for-byte unaffected by whether landlord collaborators
+    exist: run the same scenario twice, once with them monkeypatched present (but would only
+    ever be reached if rental_supply were enabled) and once entirely absent."""
+    delta_by_tick = {1: TickDelta(moves=[], changes=[], vacancies=[_vacancy()])}
+
+    async def _run_with(monkeypatch_, run_dir, define_collaborators: bool):
+        _one_tick_harness(monkeypatch_, delta_by_tick=delta_by_tick)
+        if define_collaborators:
+            monkeypatch_.setattr(
+                engine_loop.state_builder, "build_landlord_requests",
+                lambda *a, **kw: [_landlord_req()], raising=False,
+            )
+            monkeypatch_.setattr(
+                engine_loop.decision_parse, "parse_landlord_decisions",
+                lambda *a, **kw: [_landlord_decision()], raising=False,
+            )
+            monkeypatch_.setattr(
+                engine_loop.market, "apply_landlord_decisions",
+                lambda *a, **kw: {"relet": 1}, raising=False,
+            )
+        usage_resident = Usage(requests=1, models_seen={"m": 1})
+        backend = _OrderedFakeBackend(
+            responses_by_call=[[_resp("m")]], usage_by_call=[usage_resident]
+        )
+        scenario = _rental_scenario(enabled=False)
+        await engine_loop.run_simulation(scenario, run_dir, backend=backend)
+
+    import _pytest.monkeypatch as _mp_module
+
+    run_dir_a = tmp_path / "run_a"
+    mp_a = _mp_module.MonkeyPatch()
+    try:
+        await _run_with(mp_a, run_dir_a, define_collaborators=False)
+    finally:
+        mp_a.undo()
+
+    run_dir_b = tmp_path / "run_b"
+    mp_b = _mp_module.MonkeyPatch()
+    try:
+        await _run_with(mp_b, run_dir_b, define_collaborators=True)
+    finally:
+        mp_b.undo()
+
+    ticks_a = (run_dir_a / "ticks.ndjson").read_text(encoding="utf-8")
+    ticks_b = (run_dir_b / "ticks.ndjson").read_text(encoding="utf-8")
+    assert ticks_a == ticks_b

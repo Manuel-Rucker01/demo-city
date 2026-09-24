@@ -36,11 +36,18 @@ _BATCH_SUMMARY_FILE = "batch_summary.json"
 _FINAL_SCALAR_METRICS = (
     "avg_rent", "vacancy_rate", "unemployment_rate", "avg_satisfaction",
     "residents", "tourist_units", "shops_open", "online_share",
+    # Rental-supply metrics (RentalSupplyParams; zero/default when a scenario doesn't enable it).
+    "owner_units", "rental_units", "seasonal_units", "rental_vacancy_rate", "quality",
+    "below_market_share",
 )
 
 # Per-tick time series aggregated (mean/min/max at each tick) across seeds.
-_SERIES_SCALAR_METRICS = ("avg_rent", "avg_satisfaction")
+_SERIES_SCALAR_METRICS = ("avg_rent", "avg_satisfaction", "rental_units", "seasonal_units")
 _SERIES_MODE_METRICS = ("metro", "car")  # mode_share[mode] per district, at least these two
+
+# Landlord action kinds always reported in the "cumulative" section (per LandlordAction in
+# types.py), even for a seed/batch where none occurred (0, not missing).
+_LANDLORD_ACTION_KINDS = ("relet", "sell", "seasonal", "renovate")
 
 
 @dataclass
@@ -232,6 +239,36 @@ def aggregate_series(
     return result
 
 
+def _run_totals(ticks: list[TickRecord]) -> tuple[dict[str, int], int]:
+    """One run's cumulative landlord actions by kind and cumulative completed units, summed
+    over every tick (and, for completed units, every district)."""
+    actions: dict[str, int] = dict.fromkeys(_LANDLORD_ACTION_KINDS, 0)
+    completed = 0
+    for rec in ticks:
+        for kind, count in rec.landlord_actions_by_kind.items():
+            actions[kind] = actions.get(kind, 0) + count
+        completed += sum(d.new_units_completed for d in rec.districts)
+    return actions, completed
+
+
+def aggregate_cumulative(runs_ticks: list[list[TickRecord]]) -> dict:
+    """Cross-seed stats (mean/std/min/max) of each run's CUMULATIVE landlord actions (by kind)
+    and cumulative completed construction units - a citywide total, not per-district, unlike
+    `aggregate_final_metrics`/`aggregate_series`. Zero for a run/batch that never enabled
+    `rental_supply` (landlord_actions_by_kind/new_units_completed are then always empty/0)."""
+    per_run = [_run_totals(ticks) for ticks in runs_ticks]
+    action_kinds: set[str] = set(_LANDLORD_ACTION_KINDS)
+    for actions, _completed in per_run:
+        action_kinds.update(actions)
+
+    landlord_actions = {
+        kind: _stats([float(actions.get(kind, 0)) for actions, _c in per_run])
+        for kind in sorted(action_kinds)
+    }
+    completed_units = _stats([float(c) for _a, c in per_run])
+    return {"landlord_actions": landlord_actions, "completed_units": completed_units}
+
+
 def aggregate_usage(summaries: list[RunSummary]) -> dict:
     total = Usage()
     for s in summaries:
@@ -265,6 +302,9 @@ def aggregate_batch(
     if runs_ticks_by_seed is not None:
         ordered = [runs_ticks_by_seed[r.seed] for r in ok if r.seed in runs_ticks_by_seed]
         payload["series"] = aggregate_series(ordered) if ordered else {}
+        payload["cumulative"] = (
+            aggregate_cumulative(ordered) if ordered else aggregate_cumulative([])
+        )
     return payload
 
 
@@ -328,6 +368,12 @@ def compare_batches(summary_a: dict, summary_b: dict) -> list[dict]:
             else:
                 rows.append(_compare_row(did, metric, da.get(metric), db.get(metric)))
     return rows
+
+
+def compare_row(district: str, metric: str, stat_a: dict | None, stat_b: dict | None) -> dict:
+    """Public wrapper around `_compare_row` for callers (e.g. the CLI) comparing a stat pair
+    that isn't itself in a `final_metrics` payload, such as the `cumulative` section."""
+    return _compare_row(district, metric, stat_a, stat_b)
 
 
 def _compare_row(district: str, metric: str, stat_a: dict | None, stat_b: dict | None) -> dict:

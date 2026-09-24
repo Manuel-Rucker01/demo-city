@@ -7,16 +7,21 @@ import logging
 import random
 
 from jevcity.types import (
+    LANDLORD_QUESTION,
     Action,
     AgentDecision,
     CommuteMode,
     DecisionRequest,
     JevResponse,
+    LandlordAction,
+    LandlordDecision,
     ShoppingPlace,
     question_key,
 )
 
 logger = logging.getLogger(__name__)
+
+LANDLORD_CONFIDENCE_THRESHOLD = 0.35  # only used by policy "gate"; matches JevConfig's default
 
 
 def _clamp01(x: float) -> float:
@@ -179,6 +184,77 @@ def parse_decisions(
                     action_probs=probs,
                     commute_mode=commute_mode,
                     shopping_place=shopping_place,
+                )
+            )
+
+    return decisions
+
+
+def parse_landlord_decisions(
+    reqs: list[DecisionRequest],
+    responses: list[JevResponse],
+    policy: str = "sample",
+    seed: int = 0,
+) -> list[LandlordDecision]:
+    """Map landlord_action answers to LandlordDecisions. Policy "sample"/"argmax" reuse
+    `_pick` (see its docstring); "gate" falls back to RELET (the do-nothing-different default,
+    playing the same role STAY plays for residents) when confidence is below
+    LANDLORD_CONFIDENCE_THRESHOLD. A missing answer always falls back to RELET.
+    `district` is read back from `req.state["district_id"]`, stashed there by
+    `state_builder.build_landlord_requests` for exactly this purpose (never sent as a
+    question, so it costs Jev nothing to reason about)."""
+    decisions: list[LandlordDecision] = []
+
+    for req, resp in zip(reqs, responses, strict=True):
+        district = ""
+        if isinstance(req.state, dict):
+            district = str(req.state.get("district_id", ""))
+
+        for vacancy_id in req.agent_ids:
+            ans = resp.answers.get(question_key(vacancy_id, LANDLORD_QUESTION))
+            if ans is None:
+                logger.warning(
+                    "t%d vacancy %d: missing 'landlord_action' answer, falling back to RELET",
+                    req.tick,
+                    vacancy_id,
+                )
+                decisions.append(
+                    LandlordDecision(
+                        vacancy_id=vacancy_id,
+                        tick=req.tick,
+                        district=district,
+                        action=LandlordAction.RELET,
+                        confidence=0.0,
+                        action_probs={},
+                    )
+                )
+                continue
+
+            confidence = float(ans.get("confidence", 0.0))
+            probs = dict(ans.get("probabilities", {}))
+            if policy == "gate" and confidence < LANDLORD_CONFIDENCE_THRESHOLD:
+                action = LandlordAction.RELET
+            else:
+                chosen = _pick(ans, policy, seed, req.tick, vacancy_id, LANDLORD_QUESTION)
+                try:
+                    action = LandlordAction(chosen)
+                except ValueError:
+                    logger.warning(
+                        "t%d vacancy %d: unrecognized landlord action %r, falling back to RELET",
+                        req.tick,
+                        vacancy_id,
+                        chosen,
+                    )
+                    action = LandlordAction.RELET
+
+            decisions.append(
+                LandlordDecision(
+                    vacancy_id=vacancy_id,
+                    tick=req.tick,
+                    district=district,
+                    action=action,
+                    confidence=confidence,
+                    action_probs=probs,
                 )
             )
 

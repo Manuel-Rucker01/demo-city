@@ -10,10 +10,11 @@ from __future__ import annotations
 
 import math
 
-from jevcity.types import Agent, Occupation, Tenure, World
+from jevcity.types import Agent, LandlordType, Occupation, Tenure, World
 
 TICKS_PER_MONTH = 30
 MORTGAGE_AGE_CUTOFF = 55  # kept in sync with population/generator.py's constant of the same name
+LOCK_IN_BELOW_MARKET_THRESHOLD = 0.85  # kept in sync with DistrictSnapshot.below_market_share
 
 
 # --- rent burden -----------------------------------------------------------------------------
@@ -61,11 +62,26 @@ def tenure_text(agent: Agent) -> str:
     return "owns their home outright"
 
 
-def housing_text(agent: Agent) -> str:
+def housing_text(agent: Agent, market_rent: float | None = None) -> str:
     """One compact `person.rent_burden`-field sentence combining tenure_text and
     housing_cost_text (a separate "housing" key would push some K=1 states over the
-    ~300-token budget; see state_builder.py's module docstring)."""
-    return f"{tenure_text(agent)}; {housing_cost_text(agent)}"
+    ~300-token budget; see state_builder.py's module docstring).
+
+    When `market_rent` (the agent's home district's current new-lease market rent) is given
+    and the agent is a renter paying below LOCK_IN_BELOW_MARKET_THRESHOLD of it, appends a
+    short lock-in note so Jev can weigh staying put against a below-market lease -- see
+    DistrictSnapshot.below_market_share, the same threshold used for reporting."""
+    text = f"{tenure_text(agent)}; {housing_cost_text(agent)}"
+    below_market = (
+        agent.tenure is Tenure.RENTER
+        and market_rent is not None
+        and market_rent > 0
+        and agent.rent_monthly < LOCK_IN_BELOW_MARKET_THRESHOLD * market_rent
+    )
+    if below_market:
+        pct = round((1 - agent.rent_monthly / market_rent) * 100)
+        text += f"; {pct}% below market"
+    return text
 
 
 # --- affordability of a (possibly different) district's new-lease rent ---------------------
@@ -307,3 +323,58 @@ def transit_bucket_text(transit_score: float, transit_boost: float) -> str:
 
 def lez_note_text(car_cost_extra_monthly: float) -> str:
     return f"low-emission zone: +€{round(car_cost_extra_monthly)}/mo by car"
+
+
+# --- landlord (rental-supply decisions) -----------------------------------------------------
+
+
+def landlord_type_text(landlord_type: LandlordType) -> str:
+    if landlord_type is LandlordType.LARGE:
+        return "company owning many flats"
+    return "small landlord, owns this one flat"
+
+
+def flat_condition_text(quality: float) -> str:
+    """Bucketed from DistrictState.quality (rental stock maintenance level, 0..1)."""
+    if quality >= 0.8:
+        return "good condition"
+    if quality >= 0.5:
+        return "some wear"
+    return "run down"
+
+
+def tenant_years_text(years: float) -> str:
+    if years < 1:
+        return "less than 1 year"
+    years_r = round(years)
+    unit = "year" if years_r == 1 else "years"
+    return f"{years_r} {unit}"
+
+
+def rent_cap_note_text(rent_cap: float) -> str:
+    return f"new leases limited to €{round(rent_cap)}/mo, below market"
+
+
+def seasonal_option_text(
+    market_rent: float, seasonal_rent_multiple: float, *, rent_cap_active: bool, seasonal_capped: bool
+) -> str:
+    """Seasonal-let income estimate. Only mentions cap coverage when a cap is actually active
+    for this district (RentalSupplyParams.seasonal_capped otherwise has nothing to bite)."""
+    seasonal_rent = round(market_rent * seasonal_rent_multiple)
+    if not rent_cap_active:
+        return f"seasonal lets earn about €{seasonal_rent}/mo"
+    coverage = "covered by the cap" if seasonal_capped else "not covered by the cap"
+    return f"seasonal lets earn about €{seasonal_rent}/mo, {coverage}"
+
+
+def sale_buyers_text(vacancy_rate: float) -> str:
+    """Qualitative buyer demand for a sale. DistrictState has no dedicated owner-market
+    signal, so this is proxied from the district's overall residential vacancy rate: a tight
+    market (scarce vacancy) plausibly means keen buyer demand too, and vice versa."""
+    buyers = "plentiful" if vacancy_rate < 0.05 else "few"
+    return f"selling is possible; buyers are {buyers}"
+
+
+def renovation_text(renovation_ticks: int) -> str:
+    months = round(renovation_ticks / TICKS_PER_MONTH)
+    return f"renovation takes about {months} months, then relet"

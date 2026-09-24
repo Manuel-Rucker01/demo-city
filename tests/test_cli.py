@@ -60,6 +60,9 @@ def _make_run_dir(
     tmp_path, run_id: str, provider: str = "mock", ticks: int = 2, *,
     tourist_units: int = 3, shops_open: int = 12, online_share: float = 0.2,
     mode_share: dict | None = None, tick_arrivals: int = 1, tick_departures: int = 0,
+    owner_units: int = 40, rental_units: int = 55, seasonal_units: int = 3,
+    rental_vacancy_rate: float = 0.06, quality: float = 0.9, new_units_completed: int = 0,
+    below_market_share: float = 0.1, landlord_actions_by_kind: dict | None = None,
 ):
     scenario = Scenario(name="cmp-scenario", ticks=ticks, n_agents=5)
     profile = _profile("d1", "D1")
@@ -81,7 +84,10 @@ def _make_run_dir(
         unemployment_rate=0.08, jobs=20, filled_jobs=18, shop_revenue=50.0,
         avg_satisfaction=0.65, avg_rent_burden=0.32, rent_cap_active=False,
         tourist_units=tourist_units, shops_open=shops_open, shop_revenue_monthly=5000.0,
-        mode_share=mode_share, online_share=online_share,
+        mode_share=mode_share, online_share=online_share, owner_units=owner_units,
+        rental_units=rental_units, seasonal_units=seasonal_units,
+        rental_vacancy_rate=rental_vacancy_rate, quality=quality,
+        new_units_completed=new_units_completed, below_market_share=below_market_share,
     )
     for tick in range(1, ticks + 1):
         writer.write_tick(
@@ -91,6 +97,7 @@ def _make_run_dir(
                 usage_tick=Usage(), usage_total=Usage(),
                 arrivals=[agent_snapshot] if tick_arrivals else [],
                 departures=[0] if tick_departures else [],
+                landlord_actions_by_kind=landlord_actions_by_kind or {},
             )
         )
     writer.write_summary(
@@ -324,6 +331,38 @@ def test_compare_shows_new_world_expansion_metrics(tmp_path, capsys):
     # run A: 1 arrival/tick x 3 ticks = 3, 0 departures. run B: 0 arrivals, 1/tick x 3 = 3.
     assert arrivals_vals == ["3", "0"]
     assert departures_vals == ["0", "3"]
+
+
+def test_compare_shows_rental_supply_metrics(tmp_path, capsys):
+    run_a = _make_run_dir(
+        tmp_path, "run-a", ticks=2, owner_units=100, rental_units=50, seasonal_units=5,
+        rental_vacancy_rate=0.1, quality=0.8, new_units_completed=3, below_market_share=0.2,
+        landlord_actions_by_kind={"relet": 2, "sell": 1},
+    )
+    run_b = _make_run_dir(
+        tmp_path, "run-b", ticks=2, owner_units=120, rental_units=40, seasonal_units=8,
+        rental_vacancy_rate=0.02, quality=0.6, new_units_completed=0, below_market_share=0.4,
+        landlord_actions_by_kind={"seasonal": 3},
+    )
+
+    code = cli.main(["compare", str(run_a), str(run_b)])
+    assert code == 0
+    out = capsys.readouterr().out
+
+    for field in ("owner_units", "rental_units", "seasonal_units", "rental_vacancy_rate",
+                  "quality", "below_market_share"):
+        assert field in out
+
+    assert "total_units_completed" in out
+    assert "landlord_actions" in out
+    lines = out.splitlines()
+    completed_line = next(line for line in lines if line.strip().startswith("total_units_completed"))
+    # run A: 3 completed/tick x 2 ticks = 6, run B: 0
+    assert completed_line.split()[1:] == ["6", "0"]
+    actions_line = next(line for line in lines if line.strip().startswith("landlord_actions"))
+    assert "relet:4" in actions_line  # 2/tick x 2 ticks
+    assert "sell:2" in actions_line
+    assert "seasonal:6" in actions_line
 
 
 def test_compare_requires_finished_runs(tmp_path, capsys):

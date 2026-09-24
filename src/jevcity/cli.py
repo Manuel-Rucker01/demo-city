@@ -309,7 +309,39 @@ def _cmd_compare_batch(args: argparse.Namespace) -> int:
             f"{row['effect']:>{val_w}.3f}{row['noise']:>{val_w}.3f}  "
             f"{'CLEAR' if row['clear'] else '-'}"
         )
+
+    cum_a = summary_a.get("cumulative")
+    cum_b = summary_b.get("cumulative")
+    if cum_a is not None and cum_b is not None:
+        print()
+        print("cumulative (citywide totals per run, not per-district):")
+        completed_row = _compare_cumulative_row(
+            "completed_units", cum_a.get("completed_units"), cum_b.get("completed_units")
+        )
+        kinds = sorted(set(cum_a.get("landlord_actions", {})) | set(cum_b.get("landlord_actions", {})))
+        action_rows = [
+            _compare_cumulative_row(
+                f"landlord_actions.{kind}",
+                cum_a.get("landlord_actions", {}).get(kind),
+                cum_b.get("landlord_actions", {}).get(kind),
+            )
+            for kind in kinds
+        ]
+        for row in [completed_row, *action_rows]:
+            if args.metric and row["metric"] != args.metric:
+                continue
+            print(
+                f"{row['metric']:<{label_w}}{row['mean_a']:>{val_w}.3f}{row['mean_b']:>{val_w}.3f}"
+                f"{row['effect']:>{val_w}.3f}{row['noise']:>{val_w}.3f}  "
+                f"{'CLEAR' if row['clear'] else '-'}"
+            )
     return 0
+
+
+def _compare_cumulative_row(metric: str, stat_a: dict | None, stat_b: dict | None) -> dict:
+    row = engine_batch.compare_row("(citywide)", metric, stat_a, stat_b)
+    row["metric"] = metric
+    return row
 
 
 def _fmt(value, width, prec=None) -> str:
@@ -334,6 +366,26 @@ def _migration_totals(reader: runlog_reader.RunReader) -> tuple[int, int]:
         arrivals += len(t.arrivals)
         departures += len(t.departures)
     return arrivals, departures
+
+
+def _rental_supply_totals(reader: runlog_reader.RunReader) -> tuple[dict[str, int], int]:
+    """Cumulative TickRecord.landlord_actions_by_kind (summed by kind) and cumulative
+    DistrictSnapshot.new_units_completed (summed over every district and tick) - 0 for a run
+    that never enabled `rental_supply`."""
+    actions: dict[str, int] = {}
+    completed = 0
+    for t in reader.ticks():
+        for kind, count in t.landlord_actions_by_kind.items():
+            actions[kind] = actions.get(kind, 0) + count
+        completed += sum(d.new_units_completed for d in t.districts)
+    return actions, completed
+
+
+def _fmt_landlord_actions(actions: dict[str, int]) -> str:
+    if not actions:
+        return "-"
+    parts = sorted(actions.items(), key=lambda kv: -kv[1])
+    return " ".join(f"{kind}:{count}" for kind, count in parts)
 
 
 def _cmd_compare(args: argparse.Namespace) -> int:
@@ -368,6 +420,18 @@ def _cmd_compare(args: argparse.Namespace) -> int:
               f"{_fmt(db.shops_open if db else 0, val_w)}")
         print(f"{'  online_share':<{label_w}}{_fmt(da.online_share if da else 0.0, val_w, 3)}"
               f"{_fmt(db.online_share if db else 0.0, val_w, 3)}")
+        print(f"{'  owner_units':<{label_w}}{_fmt(da.owner_units if da else 0, val_w)}"
+              f"{_fmt(db.owner_units if db else 0, val_w)}")
+        print(f"{'  rental_units':<{label_w}}{_fmt(da.rental_units if da else 0, val_w)}"
+              f"{_fmt(db.rental_units if db else 0, val_w)}")
+        print(f"{'  seasonal_units':<{label_w}}{_fmt(da.seasonal_units if da else 0, val_w)}"
+              f"{_fmt(db.seasonal_units if db else 0, val_w)}")
+        print(f"{'  rental_vacancy_rate':<{label_w}}{_fmt(da.rental_vacancy_rate if da else 0.0, val_w, 3)}"
+              f"{_fmt(db.rental_vacancy_rate if db else 0.0, val_w, 3)}")
+        print(f"{'  quality':<{label_w}}{_fmt(da.quality if da else 0.0, val_w, 3)}"
+              f"{_fmt(db.quality if db else 0.0, val_w, 3)}")
+        print(f"{'  below_market_share':<{label_w}}{_fmt(da.below_market_share if da else 0.0, val_w, 3)}"
+              f"{_fmt(db.below_market_share if db else 0.0, val_w, 3)}")
         mode_a = _fmt_mode_share(da.mode_share if da else {})
         mode_b = _fmt_mode_share(db.mode_share if db else {})
         mode_w = max(val_w, len(mode_a) + 2, len(mode_b) + 2)
@@ -379,6 +443,13 @@ def _cmd_compare(args: argparse.Namespace) -> int:
     arrivals_b, departures_b = _migration_totals(reader_b)
     print(f"{'total_arrivals':<{label_w}}{_fmt(arrivals_a, val_w)}{_fmt(arrivals_b, val_w)}")
     print(f"{'total_departures':<{label_w}}{_fmt(departures_a, val_w)}{_fmt(departures_b, val_w)}")
+    landlord_actions_a, completed_a = _rental_supply_totals(reader_a)
+    landlord_actions_b, completed_b = _rental_supply_totals(reader_b)
+    print(f"{'total_units_completed':<{label_w}}{_fmt(completed_a, val_w)}{_fmt(completed_b, val_w)}")
+    la_a = _fmt_landlord_actions(landlord_actions_a)
+    la_b = _fmt_landlord_actions(landlord_actions_b)
+    la_w = max(val_w, len(la_a) + 2, len(la_b) + 2)
+    print(f"{'landlord_actions':<{label_w}}{_fmt(la_a, la_w)}{_fmt(la_b, la_w)}")
     print(f"{'cost_usd':<{label_w}}{_fmt(summary_a.usage.cost_usd, val_w, 4)}{_fmt(summary_b.usage.cost_usd, val_w, 4)}")
     print(f"{'cost_source':<{label_w}}{_fmt(summary_a.usage.cost_source, val_w)}{_fmt(summary_b.usage.cost_source, val_w)}")
     models_a = ",".join(sorted(summary_a.usage.models_seen)) or "-"

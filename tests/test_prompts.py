@@ -193,8 +193,12 @@ class TestBuildRequestsK1:
             state_json = json.dumps(reqs[0].state, separators=(",", ":"))
             sizes.append(len(state_json))
         avg_size = sum(sizes) / len(sizes)
-        assert max(sizes) <= 1200, f"a K=1 state exceeded 1200 chars: {max(sizes)}"
-        assert avg_size <= 1200
+        # 1230 (was 1200): the below-market lock-in note in housing_text adds a short
+        # "; NN% below market" suffix for renters paying < 85% of their district's market
+        # rent; the real, authoritative budget is the token one in test_prompt_budget.py
+        # (TOKEN_BUDGET_AVG/MAX), which stays comfortably clear at this char count.
+        assert max(sizes) <= 1230, f"a K=1 state exceeded 1230 chars: {max(sizes)}"
+        assert avg_size <= 1230
 
     def test_state_english_and_no_long_floats(self, profiles):
         world = make_world(profiles)
@@ -243,6 +247,31 @@ class TestBuildRequestsK1:
         texts = {r.agent_ids[0]: r.state["person"]["commute"] for r in reqs}
         assert texts[1] == "car, 6y"
         assert texts[2] == "metro, <1y"
+
+    def test_renter_lock_in_note_appears_when_below_market(self, profiles):
+        world = make_world(profiles)  # eixample avg_rent = 1250
+        agent = make_agent(1, home="eixample", tenure=Tenure.RENTER, rent_monthly=900.0)
+        events = [Event(agent_id=1, kind=EventKind.PAYDAY)]
+        reqs = build_requests(world, {1: agent}, events, tick=100, agents_per_request=1)
+        text = reqs[0].state["person"]["rent_burden"]
+        assert "below market" in text
+        assert "28%" in text  # 1 - 900/1250 = 28%
+
+    def test_no_lock_in_note_when_at_or_above_market(self, profiles):
+        world = make_world(profiles)  # eixample avg_rent = 1250
+        agent = make_agent(1, home="eixample", tenure=Tenure.RENTER, rent_monthly=1200.0)
+        events = [Event(agent_id=1, kind=EventKind.PAYDAY)]
+        reqs = build_requests(world, {1: agent}, events, tick=100, agents_per_request=1)
+        text = reqs[0].state["person"]["rent_burden"]
+        assert "below market" not in text
+
+    def test_no_lock_in_note_for_owners(self, profiles):
+        world = make_world(profiles)  # eixample avg_rent = 1250
+        agent = make_agent(1, home="eixample", tenure=Tenure.OWNER, rent_monthly=300.0)
+        events = [Event(agent_id=1, kind=EventKind.PAYDAY)]
+        reqs = build_requests(world, {1: agent}, events, tick=100, agents_per_request=1)
+        text = reqs[0].state["person"]["rent_burden"]
+        assert "below market" not in text
 
     def test_person_commute_field_absent_when_no_commute_mode(self, profiles):
         world = make_world(profiles)

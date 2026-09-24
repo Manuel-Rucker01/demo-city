@@ -51,14 +51,21 @@ from jevcity.prompts.buckets import (
     affordability_text,
     commute_habit_text,
     commute_text,
+    flat_condition_text,
     housing_text,
     job_market_text,
+    landlord_type_text,
     lez_note_text,
     monthly_expenses,
+    renovation_text,
+    rent_cap_note_text,
     rent_trend_text,
+    sale_buyers_text,
     satisfaction_bucket,
     savings_text,
+    seasonal_option_text,
     shops_trend_label,
+    tenant_years_text,
     tourism_label,
     transit_bucket_text,
     vacancy_text,
@@ -69,17 +76,23 @@ from jevcity.prompts.questions import (
     action_question,
     commute_mode_question,
     destination_question,
+    landlord_question,
     mock_priors_for_agent,
+    mock_priors_for_landlord,
     satisfaction_question,
     shopping_place_question,
     spending_question,
 )
 from jevcity.types import (
+    LANDLORD_QUESTION,
     Agent,
     DecisionRequest,
     DistrictId,
     Event,
     EventKind,
+    RentalSupplyParams,
+    Scenario,
+    Vacancy,
     World,
     question_key,
 )
@@ -212,7 +225,7 @@ def _person_block(agent: Agent, world: World, tick: int) -> dict:
         "household": agent.household_size,
         "work": work_text(agent, world),
         "income": round(agent.income_monthly),
-        "rent_burden": housing_text(agent),
+        "rent_burden": housing_text(agent, world.states[agent.home].avg_rent),
         "savings": savings_text(agent.savings, monthly_expenses(agent)),
         "home": home_profile.name,
         "years_in_current_home": years_in_home_text(tick, agent.lease_start_tick),
@@ -422,6 +435,66 @@ def build_requests(
                 state=state,
                 questions=questions,
                 mock_priors=mock_priors,
+            )
+        )
+    return reqs
+
+
+# --- landlord requests -----------------------------------------------------------------------
+
+
+def _landlord_state(vacancy: Vacancy, world: World, rental_supply: RentalSupplyParams) -> dict:
+    """Compact per-vacancy state for the landlord_action question. `district_id` is included
+    only so `prompts.parse.parse_landlord_decisions` can recover it locally -- Jev is never
+    asked about it and it costs almost nothing (one short slug)."""
+    state = world.states[vacancy.district]
+    profile = world.profiles[vacancy.district]
+    market_rent = state.avg_rent
+    block: dict = {
+        "landlord": landlord_type_text(vacancy.landlord_type),
+        "district": profile.name,
+        "district_id": vacancy.district,
+        "condition": flat_condition_text(state.quality),
+        "market_rent": f"long-term market rent: €{round(market_rent)}/mo",
+    }
+    rent_cap_active = (
+        state.rent_cap is not None and market_rent > 0 and state.rent_cap < market_rent
+    )
+    if rent_cap_active:
+        block["cap"] = rent_cap_note_text(state.rent_cap)
+    block["previous_tenant"] = (
+        f"previous tenant paid €{round(vacancy.last_rent)}/mo, "
+        f"stayed {tenant_years_text(vacancy.tenant_years)}"
+    )
+    block["seasonal"] = seasonal_option_text(
+        market_rent,
+        rental_supply.seasonal_rent_multiple,
+        rent_cap_active=rent_cap_active,
+        seasonal_capped=rental_supply.seasonal_capped,
+    )
+    block["sale"] = sale_buyers_text(state.vacancy_rate)
+    block["renovation"] = renovation_text(rental_supply.renovation_ticks)
+    return block
+
+
+def build_landlord_requests(
+    world: World, vacancies: list[Vacancy], scenario: Scenario, tick: int
+) -> list[DecisionRequest]:
+    """One DecisionRequest (kind="landlord") per vacancy: a single Choice asking what the
+    landlord does with the empty flat. See buckets.py's landlord helpers for the state text
+    and questions.landlord_question / mock_priors_for_landlord for the question definition."""
+    reqs: list[DecisionRequest] = []
+    for vacancy in vacancies:
+        qkey = question_key(vacancy.vacancy_id, LANDLORD_QUESTION)
+        reqs.append(
+            DecisionRequest(
+                request_id=f"t{tick}-landlord{vacancy.vacancy_id}",
+                tick=tick,
+                agent_ids=[vacancy.vacancy_id],
+                kind="landlord",
+                state=_landlord_state(vacancy, world, scenario.rental_supply),
+                questions={qkey: landlord_question()},
+                mock_priors={qkey: mock_priors_for_landlord(vacancy, world)},
             )
         )
     return reqs

@@ -109,6 +109,37 @@ Formulas (documented here so README/docs can quote them verbatim):
   district has no resident_vacancy() left, otherwise it's added to `agents`,
   occupied_units += 1 in its home district and filled_jobs += 1 in its job district if
   employed, and returned via TickDelta.arrivals.
+
+Rental-market supply (world/rental.py; all gated on `scenario.rental_supply.enabled` -- see
+that module's docstring for the formulas). When disabled, DistrictState.owner_units /
+.rental_units / .seasonal_units are still populated at init_world (inert bookkeeping) but
+nothing below reads or mutates them again, so behaviour is bit-identical to before this was
+added:
+
+- init_world additionally splits each district's residential_base into owner_units /
+  rental_units / seasonal_units (world/rental.py::split_housing_stock) and seeds private
+  vacancy-pool bookkeeping (world._vacant_rental / ._vacant_owner / ._owner_occupied /
+  ._renter_occupied / ._pending_vacancies / ._renovation_pipeline / ._next_vacancy_id --
+  not part of the typed contract, see rental.py).
+- apply_decisions / MOVE: when enabled, feasibility uses rental.rental_vacancy(world, dst) > 0
+  instead of resident_vacancy(dst_state) -- for EVERY move, including same-district (a renter
+  relet in place still needs a vacant rental unit in that district); a successful move calls
+  rental.free_unit (emits a Vacancy for a renter's old unit -- pending landlord decision --
+  or frees an owner vacancy outright) then rental.take_rental_unit at the destination (movers
+  always end up renting, matching the existing owner-sells-on-move rule above).
+- apply_decisions / LEAVE_CITY: same rental.free_unit call for the vacated home unit.
+- daily_update_ex / _spawn_arrivals: when enabled, an arriving owner needs
+  rental.owner_vacancy(world, home) > 0, an arriving renter needs rental.rental_vacancy(...) >
+  0 (dropped otherwise, like the old resident_vacancy check); rental.take_owner_unit /
+  .take_rental_unit account for the accepted arrival.
+- daily_update_ex, every tick when enabled: rental.process_renovations (returns renovated
+  units, quality bump) and rental.process_construction (monthly starts + every-tick
+  completions, rebuilds world.completed_today); monthly only:
+  rental.process_quality (maintenance decay under a cap / recovery otherwise) and
+  rental.process_seasonal_return (a share of seasonal units trickles back to rental as
+  long-term rent closes in on seasonal income). Quality additionally nudges the satisfaction
+  baseline down by QUALITY_SATISFACTION_WEIGHT * (1 - quality) (a no-op at quality=1.0, i.e.
+  always when disabled).
 """
 
 from __future__ import annotations
@@ -133,9 +164,10 @@ from jevcity.types import (
     TickDelta,
     TouristFlatPolicy,
     TransitLinePolicy,
+    Vacancy,
     World,
 )
-from jevcity.world import commerce, tourism, transport
+from jevcity.world import commerce, rental, tourism, transport
 from jevcity.world._helpers import clip, compute_agent_scale, is_working_age, resident_vacancy
 
 RENEWAL_INCREASE_CAP_DEFAULT = 0.10  # fallback when no policy sets max_increase_pct
@@ -147,6 +179,7 @@ TRANSIT_SATISFACTION_WEIGHT = 0.05  # nudge on the satisfaction baseline for goo
 TOURISM_SATISFACTION_WEIGHT = 0.15  # nudge down for a high tourist share of the housing stock
 SHOP_CLOSURE_SATISFACTION_PENALTY = 0.05  # flat hit to residents the month local shops close
 SATISFACTION_INERTIA_WEIGHT = 0.3  # how much a single Jev answer moves satisfaction (see below)
+QUALITY_SATISFACTION_WEIGHT = 0.05  # nudge down for poor rental-stock quality (rental_supply only)
 
 
 def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
@@ -157,10 +190,16 @@ def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
     docstring for the exact formulas.
     """
     residents: dict[str, int] = {p.id: 0 for p in profiles}
+    owner_occ: dict[str, int] = {p.id: 0 for p in profiles}
+    renter_occ: dict[str, int] = {p.id: 0 for p in profiles}
     filled_jobs: dict[str, int] = {p.id: 0 for p in profiles}
     for agent in agents:
         if agent.home in residents:
             residents[agent.home] += 1
+            if agent.tenure is Tenure.OWNER:
+                owner_occ[agent.home] += 1
+            else:
+                renter_occ[agent.home] += 1
         if agent.employed and agent.job_district is not None and agent.job_district in filled_jobs:
             filled_jobs[agent.job_district] += 1
 
@@ -169,6 +208,8 @@ def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
     agent_scale: dict[str, float] = {}
     tourist_base_housing: dict[str, int] = {}
     initial_tourist_units: dict[str, int] = {}
+    vacant_owner: dict[str, int] = {}
+    vacant_rental: dict[str, int] = {}
 
     for p in profiles:
         r = residents[p.id]
@@ -179,6 +220,12 @@ def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
         t_units = tourism.initial_tourist_units(p, scale)
         tourist_base_housing[p.id] = residential_base
         initial_tourist_units[p.id] = t_units
+
+        owner_units, rental_units, seasonal_units, owner_vac0, rental_vac0 = (
+            rental.split_housing_stock(p, residential_base, owner_occ[p.id], renter_occ[p.id])
+        )
+        vacant_owner[p.id] = owner_vac0
+        vacant_rental[p.id] = rental_vac0
 
         fj = filled_jobs[p.id]
         vacancy_fraction = 0.03 + 0.02 * min(p.jobs_per_resident, 1.0)
@@ -193,6 +240,9 @@ def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
             filled_jobs=fj,
             tourist_units=t_units,
             shops_open=p.shops,
+            owner_units=owner_units,
+            rental_units=rental_units,
+            seasonal_units=seasonal_units,
         )
         rent_history[p.id] = [p.avg_rent_monthly]
 
@@ -205,6 +255,14 @@ def init_world(profiles: list[DistrictProfile], agents: list[Agent]) -> World:
     world._agent_scale = agent_scale  # type: ignore[attr-defined]
     world._tourist_base_housing = tourist_base_housing  # type: ignore[attr-defined]
     world._initial_tourist_units = initial_tourist_units  # type: ignore[attr-defined]
+    world._vacant_owner = vacant_owner  # type: ignore[attr-defined]
+    world._vacant_rental = vacant_rental  # type: ignore[attr-defined]
+    world._owner_occupied = dict(owner_occ)  # type: ignore[attr-defined]
+    world._renter_occupied = dict(renter_occ)  # type: ignore[attr-defined]
+    world._pending_vacancies = {}  # type: ignore[attr-defined]
+    world._renovation_pipeline = {p.id: [] for p in profiles}  # type: ignore[attr-defined]
+    world._next_vacancy_id = 0  # type: ignore[attr-defined]
+    world.completed_today = {}  # type: ignore[attr-defined]
     return world
 
 
@@ -272,9 +330,11 @@ def apply_decisions(
     moves: list[MoveRecord] = []
     changes: list[AgentChange] = []
     departures: list[int] = []
+    vacancies: list[Vacancy] = []
     failed_moves = 0
     job_matches = 0
     market = scenario.market
+    rs = scenario.rental_supply
 
     for decision in decisions:
         agent = agents.get(decision.agent_id)
@@ -288,6 +348,8 @@ def apply_decisions(
             src_state = world.states.get(agent.home)
             if src_state is not None:
                 src_state.occupied_units = max(src_state.occupied_units - 1, 0)
+                if rs.enabled:
+                    rental.free_unit(world, rs, rng, tick, agent, src_state, vacancies)
             if agent.employed and agent.job_district is not None:
                 job_state = world.states.get(agent.job_district)
                 if job_state is not None:
@@ -308,7 +370,11 @@ def apply_decisions(
                 failed_moves += 1
             else:
                 same_district = dst_id == src_home
-                if not same_district and resident_vacancy(dst_state) <= 0:
+                if rs.enabled:
+                    has_room = rental.rental_vacancy(world, dst_id) > 0
+                else:
+                    has_room = same_district or resident_vacancy(dst_state) > 0
+                if not has_room:
                     failed_moves += 1
                 else:
                     new_rent = dst_state.avg_rent
@@ -333,6 +399,10 @@ def apply_decisions(
                             src_state.occupied_units -= 1
                             dst_state.occupied_units += 1
                             moves.append(MoveRecord(agent_id=agent.id, src=src_home, dst=dst_id))
+                        if rs.enabled:
+                            # Read agent.tenure BEFORE it flips to RENTER below.
+                            rental.free_unit(world, rs, rng, tick, agent, src_state, vacancies)
+                            rental.take_rental_unit(world, dst_id)
                         agent.home = dst_id
                         agent.rent_monthly = new_rent
                         agent.lease_start_tick = tick
@@ -401,6 +471,7 @@ def apply_decisions(
         failed_moves=failed_moves,
         job_matches=job_matches,
         departures=departures,
+        vacancies=vacancies,
     )
 
 
@@ -525,11 +596,23 @@ def _spawn_arrivals(
     profiles_list = list(world.profiles.values())
     new_agents = spawn_fn(profiles_list, world, n, rng, start_id, tick)
 
+    rs = scenario.rental_supply
     accepted: list[Agent] = []
     for agent in new_agents:
         state = world.states.get(agent.home)
-        if state is None or resident_vacancy(state) <= 0:
-            continue  # no room for this arrival: it doesn't materialize
+        if state is None:
+            continue
+        if rs.enabled:
+            if agent.tenure is Tenure.OWNER:
+                if rental.owner_vacancy(world, agent.home) <= 0:
+                    continue  # no room for this arrival: it doesn't materialize
+                rental.take_owner_unit(world, agent.home)
+            else:
+                if rental.rental_vacancy(world, agent.home) <= 0:
+                    continue
+                rental.take_rental_unit(world, agent.home)
+        elif resident_vacancy(state) <= 0:
+            continue
         agent.active = True
         agent.arrived_tick = tick
         state.occupied_units += 1
@@ -608,6 +691,10 @@ def daily_update_ex(
                 home_state.tourist_units / home_state.housing_units if home_state.housing_units else 0.0
             )
             baseline = clip(baseline - TOURISM_SATISFACTION_WEIGHT * tourist_share, 0.0, 1.0)
+            if scenario.rental_supply.enabled:
+                baseline = clip(
+                    baseline - QUALITY_SATISFACTION_WEIGHT * (1.0 - home_state.quality), 0.0, 1.0
+                )
 
         old_satisfaction = agent.satisfaction
         agent.satisfaction = clip(agent.satisfaction + (baseline - agent.satisfaction) * 0.02, 0.0, 1.0)
@@ -634,6 +721,15 @@ def daily_update_ex(
     if tick > 0 and tick % market.rent_adjust_interval == 0:
         _adjust_rents(world, scenario)
 
+    if scenario.rental_supply.enabled:
+        rental.process_renovations(world, scenario, tick)
+        rental.process_construction(world, scenario, tick)
+        if tick > 0 and tick % TICKS_PER_MONTH == 0:
+            rental.process_quality(world, scenario, tick)
+            rental.process_seasonal_return(world, scenario, tick)
+    else:
+        world.completed_today = {}  # type: ignore[attr-defined]
+
     return TickDelta(moves=[], changes=changes, arrivals=arrivals, departures=[])
 
 
@@ -642,3 +738,15 @@ def daily_update(
 ) -> list[AgentChange]:
     """Thin backward-compatible wrapper around daily_update_ex (see its docstring)."""
     return daily_update_ex(world, agents, scenario, tick, rng).changes
+
+
+# Re-exported for the engine: apply_landlord_decisions(world, decisions, scenario, rng, tick)
+# -> dict[str, int] (counts by LandlordAction.value). Call it once per tick, right after
+# apply_decisions, with the LandlordDecisions parsed from this tick's TickDelta.vacancies
+# (kind="landlord" DecisionRequests) -- see world/rental.py's docstring for the formulas and
+# world/market.py's module docstring for exactly what it mutates. A no-op (empty counts, no
+# state change) when scenario.rental_supply.enabled is False and decisions is empty, but it
+# does not itself check `enabled` -- the engine should simply not build landlord requests, and
+# therefore not call this, when the scenario has rental_supply disabled.
+apply_landlord_decisions = rental.apply_landlord_decisions
+below_market = rental.below_market

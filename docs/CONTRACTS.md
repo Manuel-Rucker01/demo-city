@@ -23,6 +23,7 @@ daily     = daily_update_ex(world, agents, scenario, tick, rng)             # wo
                                                                               #  to daily_update(...) ->
                                                                               #  list[AgentChange], no
                                                                               #  migration, if absent)
+# --- rental supply (only when scenario.rental_supply.enabled) --- see "Rental supply" below
 writer.write_tick(TickRecord(...))                                           # runlog/
 ```
 
@@ -58,6 +59,86 @@ subset of the 10 districts.
 - If `market.daily_update_ex` doesn't exist yet (module still mid-change), the engine falls back
   to the old `daily_update(world, agents, scenario, tick, rng) -> list[AgentChange]`: no
   arrivals/departures happen, `TickRecord.arrivals`/`.departures` are empty for that run.
+
+### Rental supply (landlord decisions)
+
+Off entirely (no extra calls, no behaviour change) when `scenario.rental_supply.enabled` is
+`False` (the default) - see `RentalSupplyParams` in types.py.
+
+When enabled, after `apply_decisions` and `daily_update_ex` (or its `daily_update` fallback)
+have run for the tick, the engine collects `TickDelta.vacancies` from *both* deltas (a rental
+unit can free up either because its tenant moved away via `apply_decisions`, or through
+`daily_update_ex`'s own mechanics). If that combined list is non-empty:
+
+```
+landlord_reqs      = build_landlord_requests(world, vacancies, scenario, tick)   # prompts/state_builder.py
+landlord_responses = await backend.evaluate_many(landlord_reqs)                  # SECOND round of Jev
+                                                                                    # calls this tick;
+                                                                                    # counted in usage_tick
+                                                                                    # like the resident round
+landlord_decisions = parse_landlord_decisions(
+    landlord_reqs, landlord_responses, scenario.jev.decision_policy, scenario.seed
+)                                                                                 # prompts/parse.py
+landlord_actions_by_kind = apply_landlord_decisions(
+    world, landlord_decisions, scenario, rng, tick
+)                                                                                 # world/market.py
+                                                                                    # -> dict[str, int],
+                                                                                    #    written to
+                                                                                    #    TickRecord
+```
+
+`build_landlord_requests`/`parse_landlord_decisions` (prompts) and `apply_landlord_decisions`
+(world/market) are looked up with `getattr` (like `daily_update_ex`): if a collaborator hasn't
+landed yet, that step is skipped (no landlord requests built / no decisions applied /
+`landlord_actions_by_kind` stays `{}`) rather than raising, so this engine works against
+whichever of those functions currently exist. A budget-exceeded error during the landlord round
+stops the run early exactly like one during the resident round (same warning message and
+`warnings.json` entry); a tick that stops there has already applied its resident decisions and
+`daily_update_ex` but its `TickRecord` is not written.
+
+`DecisionRequest.kind == "landlord"` requests are ordinary `DecisionRequest`s otherwise (same
+`state`/`questions`/`mock_priors` shape), so the mock and replay backends need no special-casing:
+`cache_key`/`request_body` only look at `{state, questions}`, not `kind` or `agent_ids`.
+
+`engine/snapshot.py`'s new `DistrictSnapshot` fields are filled from `DistrictState`
+(`owner_units`, `rental_units`, `seasonal_units`, `quality` - copied straight through, `0`/`1.0`
+defaults even before the market collaborator populates them) plus two derived figures:
+- `rental_vacancy_rate` = `max(rental_units - <renters in this district> - renovating_units, 0)
+  / rental_units` (0 if `rental_units == 0`) - `renovating_units` is documented in types.py as
+  off-market but counted inside `rental_units`, so it's excluded from what counts as "vacant and
+  available".
+- `below_market_share` = share of RENTER residents in the district for whom
+  `world.below_market(agent, world)` is `True` (a rental-supply collaborator helper whose home
+  module isn't fixed yet - `world/rental.py` or `world/market.py` - looked up by `importlib` at
+  each snapshot build and cached; falls back to `agent.rent_monthly < 0.85 * district.avg_rent`
+  if neither module defines it yet).
+- `new_units_completed` = `world.completed_today.get(district_id, 0)` (`getattr` fallback to
+  `{}` if the market collaborator hasn't added `World.completed_today` yet).
+
+### Batch aggregation (engine/batch.py)
+
+`_FINAL_SCALAR_METRICS` (per-district final-tick stats) and `_SERIES_SCALAR_METRICS`
+(per-district per-tick series) both gained the rental-supply `DistrictSnapshot` fields
+(`owner_units`, `rental_units`, `seasonal_units`, `rental_vacancy_rate`, `quality`,
+`below_market_share` in the former; `rental_units`, `seasonal_units` added to the latter
+alongside the existing `avg_rent`/`avg_satisfaction`). Cumulative landlord actions and
+completed-construction units are **citywide totals per run**, not per-district, so they live in
+a separate top-level `batch_summary.json` key instead of `final_metrics`/`series` (only present
+when `run_batch`'s ticks were read back, same condition as `series`):
+
+```json
+"cumulative": {
+  "landlord_actions": {"relet": {"mean": ..., "std": ..., "min": ..., "max": ...}, "sell": {...}, "seasonal": {...}, "renovate": {...}},
+  "completed_units": {"mean": ..., "std": ..., "min": ..., "max": ...}
+}
+```
+
+Each run's totals are `sum(TickRecord.landlord_actions_by_kind)` over every tick (by kind, `0`
+for a kind that never occurred) and `sum(DistrictSnapshot.new_units_completed)` over every
+district and tick; `engine.batch.aggregate_cumulative` then takes mean/std/min/max of those
+per-run totals across seeds, same statistics helper as everything else in this module. `jevcity
+compare`'s single-run equivalent (`total_units_completed`/`landlord_actions` rows) and `jevcity
+compare-batch`'s "cumulative" section read the same underlying sums.
 
 ## Jev request shape (prompts -> jev)
 

@@ -155,6 +155,33 @@ So the default stays `quality` (K=1).
 - `argmax`: always take the top option.
 - `gate`: take the top option, unless `confidence` is below `confidence_threshold`, then stay.
 
+## Rental supply experiment
+
+`rental_supply.enabled: true` (see `scenarios/base_2y.yaml`, `scenarios/rent_cap_citywide_2y.yaml`)
+turns on a second layer of Jev decisions: whenever a long-term rental unit frees up (its tenant
+moved out or left the city), the engine asks Jev a `landlord_action` question - relet at market
+rent, sell to an owner-occupier, switch to a seasonal/short-term let, or take it off-market for a
+renovation - as a *second round* of Jev calls within the same tick, on top of the resident
+decisions. New construction (a slow-moving pipeline reacting to expected rent vs. the district's
+initial rent) adds units to the stock independently of any single landlord's decision. Each
+`DistrictSnapshot` reports the resulting split of the housing stock (`owner_units`,
+`rental_units`, `seasonal_units`), the long-term rental vacancy rate, a 0-1 maintenance `quality`
+score (capped rents let it decay), how many renters are "locked in" below the current market rent
+(`below_market_share`), and units completed that day; `jevcity compare`/`compare-batch` and
+`jevcity batch`'s `batch_summary.json` aggregate landlord actions and completed units across a
+run/batch.
+
+This is off by default (`rental_supply.enabled: false`) and every figure above is 0/absent for a
+run that doesn't enable it, so it changes nothing for existing scenarios.
+
+**Honest limitations of this experiment specifically** (on top of the general limitations below):
+it has no notion of informal or off-the-books rental agreements (everything is a modeled formal
+lease), no eviction process or tenant-protection law beyond the rent-cap policy already modeled
+(no notice periods, no legal defense, no illegal eviction), and no buyer-side behaviour when a
+landlord sells - a `sell` decision just removes the unit from the rental stock and adds it to
+`owner_units`; there is no simulated buyer with their own finances, no mortgage market, and no
+effect on who actually ends up owning it.
+
 ## Data
 
 `scripts/fetch_opendata.py` rebuilds `data/processed/` from Open Data BCN. Full provenance is in
@@ -193,10 +220,11 @@ This is a demo and a research sandbox, **not a validated model**. Be careful wit
   vacancy are plausible guesses, labelled as such; tenure comes from the 2011 census; the transit
   score is a crude density proxy (it ranks Gràcia below Nou Barris because Gràcia's area
   includes large hillside and park areas).
-- **Simplified economy.** Owners never buy (they can only sell and rent), there is no
-  migration in or out of the city, no construction, no tourism or short-term lets, and firms are just job slots. Rent
-  dynamics are a vacancy rule with fixed parameters that were tuned by hand to stay in a
-  plausible range.
+- **Simplified economy.** Owners never buy (they can only sell and rent), and firms are just job
+  slots. Rent dynamics are a vacancy rule with fixed parameters that were tuned by hand to stay
+  in a plausible range. Migration, tourism/short-term lets, and (behind `rental_supply.enabled`)
+  landlord supply decisions and construction exist but are likewise hand-tuned, not calibrated
+  (see "Rental supply experiment" above for that layer's own limitations).
 - **Small numbers.** 1,000 agents means ~130–290 per district, so a handful of moves shifts
   vacancy and rents. Use several seeds before reading anything into differences.
 - **Jev caveats.** Jev is strongest in English, weak at arithmetic (all numbers are pre-bucketed

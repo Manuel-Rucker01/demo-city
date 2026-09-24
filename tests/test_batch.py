@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from pathlib import Path
 
 import pytest
 
@@ -33,6 +34,13 @@ def _district(
     shops_open: int = 10,
     online_share: float = 0.2,
     mode_share: dict | None = None,
+    owner_units: int = 40,
+    rental_units: int = 55,
+    seasonal_units: int = 3,
+    rental_vacancy_rate: float = 0.06,
+    quality: float = 0.9,
+    new_units_completed: int = 0,
+    below_market_share: float = 0.1,
 ) -> DistrictSnapshot:
     return DistrictSnapshot(
         id=did, avg_rent=avg_rent, avg_paid_rent=avg_rent, residents=residents,
@@ -40,7 +48,9 @@ def _district(
         shop_revenue=100.0, avg_satisfaction=avg_satisfaction, avg_rent_burden=0.3,
         rent_cap_active=False, tourist_units=tourist_units, shops_open=shops_open,
         mode_share=mode_share if mode_share is not None else {"metro": 0.5, "car": 0.5},
-        online_share=online_share,
+        online_share=online_share, owner_units=owner_units, rental_units=rental_units,
+        seasonal_units=seasonal_units, rental_vacancy_rate=rental_vacancy_rate, quality=quality,
+        new_units_completed=new_units_completed, below_market_share=below_market_share,
     )
 
 
@@ -51,10 +61,13 @@ def _summary(run_id: str, districts: list[DistrictSnapshot], usage: Usage | None
     )
 
 
-def _tick(tick: int, districts: list[DistrictSnapshot]) -> TickRecord:
+def _tick(
+    tick: int, districts: list[DistrictSnapshot], landlord_actions_by_kind: dict | None = None
+) -> TickRecord:
     return TickRecord(
         tick=tick, date="2026-01-01", districts=districts, events_by_kind={}, actions_by_kind={},
         gated_decisions=0, moves=[], changes=[], usage_tick=Usage(), usage_total=Usage(),
+        landlord_actions_by_kind=landlord_actions_by_kind or {},
     )
 
 
@@ -108,6 +121,24 @@ def test_aggregate_final_metrics_missing_mode_counts_as_zero_share():
     assert result["d1"]["mode_share"]["car"]["mean"] == pytest.approx(0.5)
 
 
+def test_aggregate_final_metrics_includes_rental_supply_fields():
+    summaries = [
+        _summary("s1", [_district(owner_units=100, rental_units=50, seasonal_units=5,
+                                   rental_vacancy_rate=0.1, quality=0.8, below_market_share=0.2)]),
+        _summary("s2", [_district(owner_units=120, rental_units=60, seasonal_units=7,
+                                   rental_vacancy_rate=0.2, quality=0.9, below_market_share=0.3)]),
+    ]
+
+    result = engine_batch.aggregate_final_metrics(summaries)
+
+    assert result["d1"]["owner_units"]["mean"] == pytest.approx(110.0)
+    assert result["d1"]["rental_units"]["mean"] == pytest.approx(55.0)
+    assert result["d1"]["seasonal_units"]["mean"] == pytest.approx(6.0)
+    assert result["d1"]["rental_vacancy_rate"]["mean"] == pytest.approx(0.15)
+    assert result["d1"]["quality"]["mean"] == pytest.approx(0.85)
+    assert result["d1"]["below_market_share"]["mean"] == pytest.approx(0.25)
+
+
 # --- aggregate_series ----------------------------------------------------------------------------
 
 
@@ -147,6 +178,69 @@ def test_aggregate_series_handles_runs_with_unequal_tick_counts():
     assert rent_series[0]["mean"] == pytest.approx(1000.0)  # both runs have tick 1
     assert rent_series[1]["mean"] == pytest.approx(1200.0)  # only run2 has tick 2
     assert rent_series[1]["min"] == rent_series[1]["max"] == pytest.approx(1200.0)
+
+
+def test_aggregate_series_includes_rental_and_seasonal_units():
+    run1 = [_tick(1, [_district(rental_units=50, seasonal_units=4)])]
+    run2 = [_tick(1, [_district(rental_units=70, seasonal_units=6)])]
+
+    series = engine_batch.aggregate_series([run1, run2])
+
+    assert series["d1"]["rental_units"][0]["mean"] == pytest.approx(60.0)
+    assert series["d1"]["seasonal_units"][0]["mean"] == pytest.approx(5.0)
+
+
+# --- aggregate_cumulative ------------------------------------------------------------------------
+
+
+def test_aggregate_cumulative_sums_landlord_actions_and_completed_units_per_run():
+    run1 = [
+        _tick(1, [_district(new_units_completed=2)], landlord_actions_by_kind={"relet": 3, "sell": 1}),
+        _tick(2, [_district(new_units_completed=1)], landlord_actions_by_kind={"relet": 1}),
+    ]
+    run2 = [
+        _tick(1, [_district(new_units_completed=0)], landlord_actions_by_kind={"seasonal": 2}),
+    ]
+
+    result = engine_batch.aggregate_cumulative([run1, run2])
+
+    # run1 totals: relet=4, sell=1, seasonal=0, renovate=0, completed=3
+    # run2 totals: relet=0, sell=0, seasonal=2, renovate=0, completed=0
+    assert result["landlord_actions"]["relet"]["mean"] == pytest.approx(2.0)
+    assert result["landlord_actions"]["sell"]["mean"] == pytest.approx(0.5)
+    assert result["landlord_actions"]["seasonal"]["mean"] == pytest.approx(1.0)
+    assert result["landlord_actions"]["renovate"]["mean"] == pytest.approx(0.0)
+    assert result["completed_units"]["mean"] == pytest.approx(1.5)
+    assert result["completed_units"]["min"] == pytest.approx(0.0)
+    assert result["completed_units"]["max"] == pytest.approx(3.0)
+
+
+def test_aggregate_cumulative_zero_for_no_runs():
+    result = engine_batch.aggregate_cumulative([])
+    assert result["completed_units"] == {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0}
+    for kind in ("relet", "sell", "seasonal", "renovate"):
+        assert result["landlord_actions"][kind]["mean"] == 0.0
+
+
+def test_aggregate_batch_includes_cumulative_when_ticks_given():
+    seed_results = [
+        engine_batch.SeedResult(seed=1, run_dir=Path("."), summary=_summary("s1", [_district()])),
+    ]
+    runs_ticks = {1: [_tick(1, [_district(new_units_completed=5)], landlord_actions_by_kind={"relet": 2})]}
+
+    payload = engine_batch.aggregate_batch("s", "mock", seed_results, runs_ticks)
+
+    assert "cumulative" in payload
+    assert payload["cumulative"]["completed_units"]["mean"] == pytest.approx(5.0)
+    assert payload["cumulative"]["landlord_actions"]["relet"]["mean"] == pytest.approx(2.0)
+
+
+def test_aggregate_batch_omits_cumulative_when_no_ticks_given():
+    seed_results = [
+        engine_batch.SeedResult(seed=1, run_dir=Path("."), summary=_summary("s1", [_district()])),
+    ]
+    payload = engine_batch.aggregate_batch("s", "mock", seed_results, None)
+    assert "cumulative" not in payload
 
 
 # --- aggregate_usage -------------------------------------------------------------------------
@@ -369,6 +463,46 @@ def test_cli_compare_batch_prints_clear_and_noisy_rows(tmp_path, capsys):
     assert "heuristic" in out.lower()
 
 
+def test_cli_compare_batch_prints_cumulative_section_when_present(tmp_path, capsys):
+    batch_a = tmp_path / "batch-a"
+    batch_b = tmp_path / "batch-b"
+    batch_a.mkdir()
+    batch_b.mkdir()
+    engine_batch.write_batch_summary(batch_a, {
+        "scenario": "s", "seeds": [1, 2],
+        "final_metrics": {"d1": {"avg_rent": {"mean": 1000.0, "std": 0.0, "min": 1000, "max": 1000}}},
+        "cumulative": {
+            "landlord_actions": {
+                "relet": {"mean": 10.0, "std": 1.0, "min": 9.0, "max": 11.0},
+                "sell": {"mean": 2.0, "std": 0.0, "min": 2.0, "max": 2.0},
+                "seasonal": {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0},
+                "renovate": {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0},
+            },
+            "completed_units": {"mean": 5.0, "std": 0.0, "min": 5.0, "max": 5.0},
+        },
+    })
+    engine_batch.write_batch_summary(batch_b, {
+        "scenario": "s", "seeds": [1, 2],
+        "final_metrics": {"d1": {"avg_rent": {"mean": 1000.0, "std": 0.0, "min": 1000, "max": 1000}}},
+        "cumulative": {
+            "landlord_actions": {
+                "relet": {"mean": 20.0, "std": 1.0, "min": 19.0, "max": 21.0},
+                "sell": {"mean": 2.0, "std": 0.0, "min": 2.0, "max": 2.0},
+                "seasonal": {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0},
+                "renovate": {"mean": 0.0, "std": 0.0, "min": 0.0, "max": 0.0},
+            },
+            "completed_units": {"mean": 15.0, "std": 0.0, "min": 15.0, "max": 15.0},
+        },
+    })
+
+    code = cli.main(["compare-batch", str(batch_a), str(batch_b)])
+    assert code == 0
+    out = capsys.readouterr().out
+    assert "cumulative" in out
+    assert "landlord_actions.relet" in out
+    assert "completed_units" in out
+
+
 def test_cli_compare_batch_requires_finished_batches(tmp_path, capsys):
     batch_a = tmp_path / "batch-a"
     batch_a.mkdir()
@@ -424,6 +558,37 @@ def test_end_to_end_mock_batch_produces_batch_summary(tmp_path):
         "--batch-id", "e2e-mock-batch", "--out", str(tmp_path),
     ])
     assert code2 == 0
+
+
+def test_end_to_end_mock_batch_with_rental_supply_includes_cumulative_section(tmp_path):
+    """scenarios/base_2y.yaml has rental_supply.enabled: true - a real (mock) batch through it
+    should produce final_metrics/series carrying the new DistrictSnapshot fields plus a
+    top-level `cumulative` (landlord actions / completed units) section."""
+    code = cli.main([
+        "batch", "--scenario", "scenarios/base_2y.yaml", "--seeds", "2",
+        "--agents", "60", "--ticks", "45", "--parallel", "2",
+        "--batch-id", "e2e-rental-supply-batch", "--out", str(tmp_path),
+    ])
+    assert code == 0
+
+    batch_dir = tmp_path / "e2e-rental-supply-batch"
+    payload = json.loads((batch_dir / "batch_summary.json").read_text(encoding="utf-8"))
+
+    assert payload["succeeded_seeds"] == [1, 2]
+    some_district = next(iter(payload["final_metrics"].values()))
+    for field in ("owner_units", "rental_units", "seasonal_units", "rental_vacancy_rate",
+                  "quality", "below_market_share"):
+        assert field in some_district, field
+
+    some_series = next(iter(payload["series"].values()))
+    assert "rental_units" in some_series
+    assert "seasonal_units" in some_series
+
+    assert "cumulative" in payload
+    assert "completed_units" in payload["cumulative"]
+    assert set(payload["cumulative"]["landlord_actions"]) == {
+        "relet", "sell", "seasonal", "renovate",
+    }
 
 
 def test_export_web_prefixes_seed_runs_with_batch_id(tmp_path):
