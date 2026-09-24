@@ -55,9 +55,25 @@ export function districtDisplayName(id: string): string {
   const names: Record<string, string> = {
     ciutat_vella: "Ciutat Vella",
     eixample: "Eixample",
+    sants_montjuic: "Sants-Montjuïc",
+    les_corts: "Les Corts",
+    sarria_sant_gervasi: "Sarrià-Sant Gervasi",
     gracia: "Gràcia",
-    sant_marti: "Sant Martí",
+    horta_guinardo: "Horta-Guinardó",
     nou_barris: "Nou Barris",
+    sant_andreu: "Sant Andreu",
+    sant_marti: "Sant Martí",
   };
   return names[id] ?? id;
+}
+
+export function commuteModeLabel(mode: string): string {
+  const labels: Record<string, string> = {
+    metro: "Metro/tram",
+    bus: "Bus",
+    car: "Car",
+    bike: "Bike",
+    walk: "Walk",
+  };
+  return labels[mode] ?? mode;
 }

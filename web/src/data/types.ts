@@ -3,21 +3,37 @@
  *
  * Field names are snake_case to match the pydantic JSON exactly — do not camelCase these.
  * Only the subset of fields the web app reads is included; keep in sync with CONTRACTS.md.
+ *
+ * All fields added for the 10-district / tourism / commute / migration expansion are marked
+ * optional so older exported runs (5 districts, no tourism/commute/migration data) still
+ * typecheck and render without those features.
  */
 
 export type DistrictId = string;
 
+/** All 10 official Barcelona districts, in code order — mirrors BCN_DISTRICTS in types.py. */
 export const DISTRICT_IDS = [
   "ciutat_vella",
   "eixample",
+  "sants_montjuic",
+  "les_corts",
+  "sarria_sant_gervasi",
   "gracia",
-  "sant_marti",
+  "horta_guinardo",
   "nou_barris",
+  "sant_andreu",
+  "sant_marti",
 ] as const;
 
 export type Occupation = "student" | "low_skill" | "mid_skill" | "high_skill" | "retired";
 
 export type Source = "opendata" | "derived" | "plausible";
+
+export type Tenure = "renter" | "owner";
+
+export type CommuteMode = "metro" | "bus" | "car" | "bike" | "walk";
+
+export type ShoppingPlace = "local" | "work_district" | "centre" | "online";
 
 export interface DistrictProfile {
   id: DistrictId;
@@ -34,6 +50,8 @@ export interface DistrictProfile {
   centroid: [number, number]; // [lon, lat]
   sources: Record<string, Source>;
   refs?: Record<string, string>;
+  tourist_flats?: number | null;
+  commute_mode_share?: Record<string, number> | null;
 }
 
 export interface Usage {
@@ -64,6 +82,14 @@ export interface DistrictSnapshot {
   avg_satisfaction: number;
   avg_rent_burden: number;
   rent_cap_active: boolean;
+  /** Tourism / commerce / mobility fields — optional for backward compatibility. */
+  tourist_units?: number;
+  shops_open?: number;
+  shop_revenue_monthly?: number;
+  mode_share?: Partial<Record<CommuteMode, number>>;
+  online_share?: number;
+  arrivals?: number;
+  departures?: number;
 }
 
 export interface MoveRecord {
@@ -78,6 +104,22 @@ export interface AgentChange {
   satisfaction?: number | null;
 }
 
+export interface AgentSnapshot {
+  id: number;
+  age: number;
+  occupation: Occupation;
+  home: DistrictId;
+  employed: boolean;
+  job_district: DistrictId | null;
+  wage_monthly: number;
+  rent_monthly: number;
+  satisfaction: number;
+  tenure?: Tenure;
+  children?: number;
+  has_car?: boolean;
+  commute_mode?: CommuteMode | null;
+}
+
 export interface TickRecord {
   tick: number;
   date: string;
@@ -89,6 +131,10 @@ export interface TickRecord {
   changes: AgentChange[];
   usage_tick: Usage;
   usage_total: Usage;
+  /** New households arriving this tick (new agent ids, not present in agents.json or any earlier tick). */
+  arrivals?: AgentSnapshot[];
+  /** Agent ids that left Barcelona this tick — no longer rendered / counted after this. */
+  departures?: number[];
 }
 
 export interface RentCapPolicy {
@@ -100,7 +146,30 @@ export interface RentCapPolicy {
   max_increase_pct?: number | null;
 }
 
-export type Policy = RentCapPolicy;
+export interface TouristFlatPolicy {
+  type: "tourist_flat_ban";
+  districts: DistrictId[] | "all";
+  start_tick: number;
+  end_tick: number;
+  reduction?: number;
+  return_to_rental_share?: number;
+}
+
+export interface TransitLinePolicy {
+  type: "new_transit_line";
+  districts: DistrictId[];
+  start_tick: number;
+  transit_boost?: number;
+}
+
+export interface LowEmissionZonePolicy {
+  type: "low_emission_zone";
+  districts: DistrictId[];
+  start_tick: number;
+  car_cost_monthly?: number;
+}
+
+export type Policy = RentCapPolicy | TouristFlatPolicy | TransitLinePolicy | LowEmissionZonePolicy;
 
 export interface Scenario {
   name: string;
@@ -120,18 +189,6 @@ export interface RunMeta {
   profiles: DistrictProfile[];
   start_date: string;
   jev_model: string;
-}
-
-export interface AgentSnapshot {
-  id: number;
-  age: number;
-  occupation: Occupation;
-  home: DistrictId;
-  employed: boolean;
-  job_district: DistrictId | null;
-  wage_monthly: number;
-  rent_monthly: number;
-  satisfaction: number;
 }
 
 export interface RunSummary {

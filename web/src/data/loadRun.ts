@@ -1,7 +1,7 @@
 /** Fetches a run's static files from public/runs/<run_id>/ and reconstructs per-tick state. */
 
 import { streamNdjson } from "./ndjson";
-import { reconstructRun, type ReconstructedRun } from "./reconstruct";
+import { buildCombinedAgents, reconstructRun, type ReconstructedRun } from "./reconstruct";
 import type { AgentSnapshot, RunIndex, RunMeta, RunSummary, TickRecord } from "./types";
 
 const RUNS_BASE = "/runs";
@@ -47,7 +47,11 @@ export async function fetchTicks(
 
 export interface LoadedRun {
   meta: RunMeta;
+  /** Initial population only (agents.json), as before. */
   agents: AgentSnapshot[];
+  /** Initial population + every arrival across the run, in column order — matches `state`'s
+   * dense agent index 1:1, so this is what MapView should be constructed with. */
+  combinedAgents: AgentSnapshot[];
   summary: RunSummary;
   ticks: TickRecord[];
   state: ReconstructedRun;
@@ -62,5 +66,6 @@ export async function loadRun(runId: string, onProgress?: (loaded: number, total
   const totalTicks = meta.scenario.ticks;
   const ticks = await fetchTicks(runId, (loaded) => onProgress?.(loaded, totalTicks));
   const state = reconstructRun(agents, ticks);
-  return { meta, agents, summary, ticks, state };
+  const combinedAgents = buildCombinedAgents(agents, ticks);
+  return { meta, agents, combinedAgents, summary, ticks, state };
 }

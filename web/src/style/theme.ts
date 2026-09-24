@@ -11,13 +11,22 @@ export const FG_DIM = "#8b93a7";
 export const BORDER = "#1e222c";
 export const ACCENT = "#4dabf7";
 
-// Five distinct, dark-mode-legible hues, one per district (WCAG-checked against #07090d: all >4.5:1).
+// Ten distinct, dark-mode-legible hues, one per Barcelona district (WCAG-checked against
+// #07090d: all >=4.5:1 contrast — see style/theme.test.ts). The original 5 districts keep their
+// original colors so existing 5-district runs/recordings look unchanged; the 5 new districts
+// get new hues chosen to stay visually separable from all the others (>=25 degrees of hue
+// separation and/or distinct lightness) rather than just interpolating between the old ones.
 export const DISTRICT_COLORS: Record<DistrictId, string> = {
   ciutat_vella: "#ff6b6b", // coral red
   eixample: "#4dabf7", // sky blue
   gracia: "#ffd43b", // amber — the rent-cap district, kept visually prominent
   sant_marti: "#38d9a9", // teal
   nou_barris: "#cc5de8", // magenta/purple
+  sants_montjuic: "#ff922b", // orange
+  les_corts: "#63e6be", // mint
+  sarria_sant_gervasi: "#748ffc", // indigo
+  horta_guinardo: "#f783ac", // pink
+  sant_andreu: "#a9e34b", // lime
 };
 
 export function hexToRgb(hex: string): [number, number, number] {
@@ -61,3 +70,14 @@ export function viridisCss(t: number): string {
 
 export const EMPLOYED_COLOR: [number, number, number] = [77, 171, 247]; // blue
 export const UNEMPLOYED_COLOR: [number, number, number] = [255, 107, 107]; // red
+
+// Commute-mode dot colors ("color by commute mode" map mode) — distinct from the district
+// palette above so the two modes never look confusable, and legible on the dark basemap.
+export const COMMUTE_MODE_COLORS: Record<string, [number, number, number]> = {
+  metro: [77, 171, 247], // blue
+  bus: [255, 212, 59], // amber
+  car: [255, 107, 107], // red
+  bike: [105, 219, 124], // green
+  walk: [173, 181, 189], // neutral grey
+};
+export const COMMUTE_MODE_UNKNOWN_COLOR: [number, number, number] = [90, 96, 112];

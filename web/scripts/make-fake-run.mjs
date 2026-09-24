@@ -5,9 +5,13 @@
  * Python simulation produces real output. Also copies/creates web/public/data/districts.geojson.
  *
  * Shapes mirror src/jevcity/types.py exactly (see docs/CONTRACTS.md) — snake_case fields.
+ * Covers the 10-district / tourism / commute / migration expansion: all 10 BCN_DISTRICTS,
+ * tourist_units/shops_open/mode_share/online_share on DistrictSnapshot, arrivals/departures on
+ * TickRecord (new households with new ids appearing mid-run, and households leaving), and a mix
+ * of the four policy types so the web UI's markLine annotations have something to draw.
  */
 
-import { mkdirSync, writeFileSync, existsSync, copyFileSync, createWriteStream } from "node:fs";
+import { mkdirSync, writeFileSync, existsSync, readFileSync, createWriteStream } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -21,76 +25,80 @@ const N_AGENTS = 1000;
 const TICKS = 365;
 const START_DATE = "2026-01-01";
 
+const COMMUTE_MODES = ["metro", "bus", "car", "bike", "walk"];
+
+// All 10 official Barcelona districts (mirrors BCN_DISTRICTS in src/jevcity/types.py), with
+// plausible (not real opendata) stats for fake dev data.
 const DISTRICTS = [
   {
-    id: "ciutat_vella",
-    name: "Ciutat Vella",
-    population: 100_000,
-    share: 0.12,
-    avg_rent_monthly: 1150,
-    unemployment_rate: 0.14,
-    vacancy_rate: 0.05,
-    income_per_capita_annual: 21000,
-    jobs_per_resident: 0.85,
-    shops: 3200,
-    transit_score: 0.9,
-    centroid: [2.176, 41.381],
+    id: "ciutat_vella", name: "Ciutat Vella", population: 100_000, share: 0.09,
+    avg_rent_monthly: 1150, unemployment_rate: 0.14, vacancy_rate: 0.05,
+    income_per_capita_annual: 21000, jobs_per_resident: 0.85, shops: 3200, transit_score: 0.9,
+    centroid: [2.176, 41.381], tourist_flats: 4200,
+    commute_mode_share: { metro: 0.42, bus: 0.13, car: 0.08, bike: 0.1, walk: 0.27 },
   },
   {
-    id: "eixample",
-    name: "Eixample",
-    population: 265_000,
-    share: 0.28,
-    avg_rent_monthly: 1350,
-    unemployment_rate: 0.09,
-    vacancy_rate: 0.04,
-    income_per_capita_annual: 27000,
-    jobs_per_resident: 1.1,
-    shops: 6100,
-    transit_score: 0.95,
-    centroid: [2.162, 41.391],
+    id: "eixample", name: "Eixample", population: 265_000, share: 0.2,
+    avg_rent_monthly: 1350, unemployment_rate: 0.09, vacancy_rate: 0.04,
+    income_per_capita_annual: 27000, jobs_per_resident: 1.1, shops: 6100, transit_score: 0.95,
+    centroid: [2.162, 41.391], tourist_flats: 3100,
+    commute_mode_share: { metro: 0.45, bus: 0.14, car: 0.14, bike: 0.12, walk: 0.15 },
   },
   {
-    id: "gracia",
-    name: "Gràcia",
-    population: 121_000,
-    share: 0.16,
-    avg_rent_monthly: 1250,
-    unemployment_rate: 0.1,
-    vacancy_rate: 0.035,
-    income_per_capita_annual: 24500,
-    jobs_per_resident: 0.7,
-    shops: 2400,
-    transit_score: 0.82,
-    centroid: [2.156, 41.404],
+    id: "sants_montjuic", name: "Sants-Montjuïc", population: 180_000, share: 0.1,
+    avg_rent_monthly: 1050, unemployment_rate: 0.12, vacancy_rate: 0.045,
+    income_per_capita_annual: 20500, jobs_per_resident: 0.75, shops: 2600, transit_score: 0.8,
+    centroid: [2.146, 41.372], tourist_flats: 900,
+    commute_mode_share: { metro: 0.38, bus: 0.16, car: 0.16, bike: 0.09, walk: 0.21 },
   },
   {
-    id: "sant_marti",
-    name: "Sant Martí",
-    population: 236_000,
-    share: 0.26,
-    avg_rent_monthly: 1200,
-    unemployment_rate: 0.11,
-    vacancy_rate: 0.055,
-    income_per_capita_annual: 23000,
-    jobs_per_resident: 0.95,
-    shops: 3900,
-    transit_score: 0.78,
-    centroid: [2.199, 41.407],
+    id: "les_corts", name: "Les Corts", population: 82_000, share: 0.06,
+    avg_rent_monthly: 1400, unemployment_rate: 0.07, vacancy_rate: 0.03,
+    income_per_capita_annual: 33000, jobs_per_resident: 0.95, shops: 1500, transit_score: 0.75,
+    centroid: [2.13, 41.384], tourist_flats: 300,
+    commute_mode_share: { metro: 0.33, bus: 0.15, car: 0.22, bike: 0.1, walk: 0.2 },
   },
   {
-    id: "nou_barris",
-    name: "Nou Barris",
-    population: 165_000,
-    share: 0.18,
-    avg_rent_monthly: 850,
-    unemployment_rate: 0.17,
-    vacancy_rate: 0.06,
-    income_per_capita_annual: 16500,
-    jobs_per_resident: 0.5,
-    shops: 1800,
-    transit_score: 0.65,
-    centroid: [2.177, 41.441],
+    id: "sarria_sant_gervasi", name: "Sarrià-Sant Gervasi", population: 148_000, share: 0.08,
+    avg_rent_monthly: 1650, unemployment_rate: 0.06, vacancy_rate: 0.025,
+    income_per_capita_annual: 38000, jobs_per_resident: 0.6, shops: 2100, transit_score: 0.7,
+    centroid: [2.128, 41.401], tourist_flats: 400,
+    commute_mode_share: { metro: 0.3, bus: 0.16, car: 0.28, bike: 0.08, walk: 0.18 },
+  },
+  {
+    id: "gracia", name: "Gràcia", population: 121_000, share: 0.09,
+    avg_rent_monthly: 1250, unemployment_rate: 0.1, vacancy_rate: 0.035,
+    income_per_capita_annual: 24500, jobs_per_resident: 0.7, shops: 2400, transit_score: 0.82,
+    centroid: [2.156, 41.404], tourist_flats: 1600,
+    commute_mode_share: { metro: 0.36, bus: 0.14, car: 0.1, bike: 0.14, walk: 0.26 },
+  },
+  {
+    id: "horta_guinardo", name: "Horta-Guinardó", population: 168_000, share: 0.09,
+    avg_rent_monthly: 950, unemployment_rate: 0.13, vacancy_rate: 0.05,
+    income_per_capita_annual: 19500, jobs_per_resident: 0.55, shops: 1900, transit_score: 0.6,
+    centroid: [2.163, 41.428], tourist_flats: 150,
+    commute_mode_share: { metro: 0.27, bus: 0.22, car: 0.18, bike: 0.08, walk: 0.25 },
+  },
+  {
+    id: "nou_barris", name: "Nou Barris", population: 165_000, share: 0.09,
+    avg_rent_monthly: 850, unemployment_rate: 0.17, vacancy_rate: 0.06,
+    income_per_capita_annual: 16500, jobs_per_resident: 0.5, shops: 1800, transit_score: 0.65,
+    centroid: [2.177, 41.441], tourist_flats: 80,
+    commute_mode_share: { metro: 0.25, bus: 0.24, car: 0.16, bike: 0.07, walk: 0.28 },
+  },
+  {
+    id: "sant_andreu", name: "Sant Andreu", population: 148_000, share: 0.08,
+    avg_rent_monthly: 980, unemployment_rate: 0.12, vacancy_rate: 0.05,
+    income_per_capita_annual: 20000, jobs_per_resident: 0.65, shops: 2000, transit_score: 0.68,
+    centroid: [2.19, 41.436], tourist_flats: 200,
+    commute_mode_share: { metro: 0.3, bus: 0.2, car: 0.18, bike: 0.09, walk: 0.23 },
+  },
+  {
+    id: "sant_marti", name: "Sant Martí", population: 236_000, share: 0.12,
+    avg_rent_monthly: 1200, unemployment_rate: 0.11, vacancy_rate: 0.055,
+    income_per_capita_annual: 23000, jobs_per_resident: 0.95, shops: 3900, transit_score: 0.78,
+    centroid: [2.199, 41.407], tourist_flats: 1100,
+    commute_mode_share: { metro: 0.34, bus: 0.15, car: 0.15, bike: 0.13, walk: 0.23 },
   },
 ];
 
@@ -118,10 +126,41 @@ function weightedPick(rand, items, weights) {
   return items[items.length - 1];
 }
 
+function pickCommuteMode(rand, d) {
+  return weightedPick(rand, COMMUTE_MODES, COMMUTE_MODES.map((m) => d.commute_mode_share[m] ?? 0.01));
+}
+
 function isoDate(dayOffset) {
   const d = new Date(`${START_DATE}T00:00:00Z`);
   d.setUTCDate(d.getUTCDate() + dayOffset);
   return d.toISOString().slice(0, 10);
+}
+
+function makeAgent(id, d, rand) {
+  const occupation = weightedPick(rand, OCCUPATIONS, OCCUPATION_WEIGHTS);
+  const age =
+    occupation === "student" ? 18 + Math.floor(rand() * 12) : occupation === "retired" ? 65 + Math.floor(rand() * 20) : 25 + Math.floor(rand() * 40);
+  const baseWage = { student: 500, low_skill: 1400, mid_skill: 2200, high_skill: 3600, retired: 1300 }[occupation];
+  const wage_monthly = Math.round(baseWage * (0.8 + rand() * 0.4));
+  const employed = occupation === "retired" ? true : rand() > d.unemployment_rate;
+  const tenure = rand() < 0.35 ? "owner" : "renter";
+  const children = rand() < 0.28 && age > 24 ? 1 + (rand() < 0.3 ? 1 : 0) : 0;
+  const has_car = rand() < (d.commute_mode_share.car + 0.1);
+  return {
+    id,
+    age,
+    occupation,
+    home: d.id,
+    employed,
+    job_district: employed ? (rand() < 0.75 ? d.id : DISTRICTS[Math.floor(rand() * DISTRICTS.length)].id) : null,
+    wage_monthly,
+    rent_monthly: Math.round(d.avg_rent_monthly * (0.85 + rand() * 0.3)),
+    satisfaction: Math.min(1, Math.max(0, 0.55 + (rand() - 0.5) * 0.4)),
+    tenure,
+    children,
+    has_car,
+    commute_mode: employed || occupation === "student" ? pickCommuteMode(rand, d) : null,
+  };
 }
 
 function makeAgents(rand) {
@@ -130,39 +169,13 @@ function makeAgents(rand) {
   for (const d of DISTRICTS) {
     const count = Math.round(N_AGENTS * d.share);
     for (let i = 0; i < count && id < N_AGENTS; i++, id++) {
-      const occupation = weightedPick(rand, OCCUPATIONS, OCCUPATION_WEIGHTS);
-      const age =
-        occupation === "student" ? 18 + Math.floor(rand() * 12) : occupation === "retired" ? 65 + Math.floor(rand() * 20) : 25 + Math.floor(rand() * 40);
-      const baseWage = { student: 500, low_skill: 1400, mid_skill: 2200, high_skill: 3600, retired: 1300 }[occupation];
-      const wage_monthly = Math.round(baseWage * (0.8 + rand() * 0.4));
-      const employed = occupation === "retired" ? true : rand() > d.unemployment_rate;
-      agents.push({
-        id,
-        age,
-        occupation,
-        home: d.id,
-        employed,
-        job_district: employed ? (rand() < 0.75 ? d.id : DISTRICTS[Math.floor(rand() * DISTRICTS.length)].id) : null,
-        wage_monthly,
-        rent_monthly: Math.round(d.avg_rent_monthly * (0.85 + rand() * 0.3)),
-        satisfaction: Math.min(1, Math.max(0, 0.55 + (rand() - 0.5) * 0.4)),
-      });
+      agents.push(makeAgent(id, d, rand));
     }
   }
   // fill any rounding shortfall into the last district
   while (agents.length < N_AGENTS) {
     const d = DISTRICTS[DISTRICTS.length - 1];
-    agents.push({
-      id: agents.length,
-      age: 30,
-      occupation: "mid_skill",
-      home: d.id,
-      employed: true,
-      job_district: d.id,
-      wage_monthly: 2000,
-      rent_monthly: Math.round(d.avg_rent_monthly),
-      satisfaction: 0.6,
-    });
+    agents.push(makeAgent(agents.length, d, rand));
   }
   return agents;
 }
@@ -181,16 +194,29 @@ function districtProfiles() {
     shops: d.shops,
     transit_score: d.transit_score,
     centroid: d.centroid,
+    tourist_flats: d.tourist_flats,
+    commute_mode_share: d.commute_mode_share,
     sources: Object.fromEntries(
-      ["population", "age_distribution", "income_per_capita_annual", "avg_rent_monthly", "vacancy_rate", "unemployment_rate", "jobs_per_resident", "shops", "transit_score"].map(
-        (k) => [k, "plausible"],
-      ),
+      [
+        "population", "age_distribution", "income_per_capita_annual", "avg_rent_monthly",
+        "vacancy_rate", "unemployment_rate", "jobs_per_resident", "shops", "transit_score",
+        "tourist_flats", "commute_mode_share",
+      ].map((k) => [k, "plausible"]),
     ),
     refs: {},
   }));
 }
 
 function buildScenario(name, description, withRentCap) {
+  const policies = [];
+  if (withRentCap) {
+    policies.push({ type: "rent_cap", district: "gracia", start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0 });
+    // A few more policy types on the scenario run, purely so the web UI's markLine annotations
+    // (one per policy start/end) have every kind to render in fake dev data.
+    policies.push({ type: "tourist_flat_ban", districts: ["ciutat_vella", "gracia"], start_tick: 60, end_tick: 300, reduction: 0.6, return_to_rental_share: 0.8 });
+    policies.push({ type: "new_transit_line", districts: ["nou_barris", "horta_guinardo"], start_tick: 120, transit_boost: 0.2 });
+    policies.push({ type: "low_emission_zone", districts: ["eixample", "ciutat_vella"], start_tick: 180, car_cost_monthly: 60 });
+  }
   return {
     name,
     description,
@@ -201,16 +227,16 @@ function buildScenario(name, description, withRentCap) {
     jev: { mode: "mock", agents_per_request: 1, confidence_threshold: 0.35, max_cost_usd: 5.0 },
     market: {},
     events: {},
-    policies: withRentCap
-      ? [{ type: "rent_cap", district: "gracia", start_tick: 30, cap_pct_of_initial: 1.0, max_increase_pct: 0.0 }]
-      : [],
+    migration: { arrivals_per_month_per_1000: 1.5, leave_city_moving_cost: 3000.0 },
+    policies,
   };
 }
 
 function generateRun(runId, scenarioName, description, withRentCap, seed) {
   const rand = mulberry32(seed);
   const agents = makeAgents(rand);
-  const agentById = new Map(agents.map((a) => [a.id, a]));
+  let nextAgentId = N_AGENTS;
+  const activeIds = new Set(agents.map((a) => a.id));
 
   // Live district market state, mutated tick by tick.
   const state = new Map(
@@ -224,6 +250,14 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
         avg_satisfaction: 0.55,
         vacancy_rate: d.vacancy_rate,
         jobs: Math.round(d.population * d.jobs_per_resident * (N_AGENTS / DISTRICTS.reduce((s, x) => s + x.population, 0)) * 1e-3) || 400,
+        // Scaled to agent units the same way agents.json represents the population (N_AGENTS
+        // agents ~ sum(population) real people), so tourist_units is comparable in magnitude to
+        // `residents` rather than vanishing to 0 under an extra stray 1e-3 factor.
+        tourist_units: Math.max(1, Math.round((d.tourist_flats ?? 0) * (N_AGENTS / DISTRICTS.reduce((s, x) => s + x.population, 0)))),
+        shops_open: d.shops,
+        shops_baseline: d.shops,
+        shop_revenue_monthly: 0,
+        online_share: 0.12,
       },
     ]),
   );
@@ -238,6 +272,7 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
   let finalDistricts = null;
 
   for (let t = 1; t <= TICKS; t++) {
+    const touristBanActive = withRentCap && t >= 60 && t < 300;
     const capActive = withRentCap && t >= 30;
     const moves = [];
     const changes = [];
@@ -261,12 +296,30 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
       const satDrift = (rand() - 0.5) * 0.01 + (capActive && d.id === "gracia" ? 0.0006 : 0) - Math.max(0, s.avg_rent / s.initial_rent - 1) * 0.02;
       s.avg_satisfaction = Math.min(1, Math.max(0, s.avg_satisfaction + satDrift));
       s.vacancy_rate = Math.min(0.2, Math.max(0.01, s.vacancy_rate + (rand() - 0.5) * 0.002));
+
+      // Tourism: HUT ban (if active for this district) linearly shrinks tourist_units toward
+      // (1 - reduction) of their level at ban start; otherwise a gentle random walk.
+      const banDistricts = ["ciutat_vella", "gracia"];
+      if (touristBanActive && banDistricts.includes(d.id)) {
+        const progress = (t - 60) / (300 - 60);
+        s.tourist_units = Math.max(0, Math.round(s.tourist_units * (1 - 0.002 * progress)));
+      } else {
+        s.tourist_units = Math.max(0, Math.round(s.tourist_units + (rand() - 0.48) * 0.5));
+      }
+
+      // Local commerce: shops open drift toward the initial baseline with noise, closing a bit
+      // faster in districts under tourism/rent pressure.
+      const shopDrift = (rand() - 0.5) * 2 - Math.max(0, s.avg_rent / s.initial_rent - 1) * 3;
+      s.shops_open = Math.max(0, Math.min(s.shops_baseline * 1.1, s.shops_open + shopDrift * 0.02));
+      s.shop_revenue_monthly = Math.round(s.shops_open * (180 + rand() * 60));
+      s.online_share = Math.min(0.4, Math.max(0.05, s.online_share + (rand() - 0.5) * 0.003));
     }
 
     // Moves: a small share of agents relocate each day.
     const moveCount = Math.round(N_AGENTS * (0.001 + rand() * 0.003));
     for (let i = 0; i < moveCount; i++) {
       const agent = agents[Math.floor(rand() * agents.length)];
+      if (!activeIds.has(agent.id)) continue;
       const dst = DISTRICTS[Math.floor(rand() * DISTRICTS.length)].id;
       if (dst === agent.home) continue;
       // Rent cap makes Gràcia a relatively more attractive destination after it kicks in.
@@ -284,6 +337,7 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
     const changeCount = Math.round(N_AGENTS * (0.03 + rand() * 0.05));
     for (let i = 0; i < changeCount; i++) {
       const agent = agents[Math.floor(rand() * agents.length)];
+      if (!activeIds.has(agent.id)) continue;
       const districtState = state.get(agent.home);
       const newSat = Math.min(1, Math.max(0, agent.satisfaction + (rand() - 0.5) * 0.08 + (districtState.avg_satisfaction - 0.55) * 0.05));
       let employedChanged = null;
@@ -295,6 +349,39 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
       changes.push({ agent_id: agent.id, employed: employedChanged, satisfaction: Number(newSat.toFixed(4)) });
       actionsByKind[rand() < 0.5 ? "spend" : "save"] += 1;
     }
+
+    // Migration: households arriving (new agent ids, brand-new AgentSnapshots) and departing
+    // (existing active agents leaving the city — removed from their district's residents and
+    // marked inactive so no later move/change references them).
+    const arrivals = [];
+    const departures = [];
+    const arrivalsExpected = (N_AGENTS / 1000) * 1.5 * (1 / 30); // arrivals_per_month_per_1000 / ticks_per_month
+    const arrivalCount = Math.random ? Math.floor(arrivalsExpected) + (rand() < arrivalsExpected % 1 ? 1 : 0) : 0;
+    for (let i = 0; i < arrivalCount; i++) {
+      const d = DISTRICTS[Math.floor(rand() * DISTRICTS.length)];
+      const newAgent = makeAgent(nextAgentId, d, rand);
+      nextAgentId += 1;
+      activeIds.add(newAgent.id);
+      arrivals.push(newAgent);
+      state.get(d.id).residents += 1;
+    }
+    const departureProb = 0.00004; // small per-agent daily chance of leaving the city entirely
+    if (activeIds.size > N_AGENTS * 0.5) {
+      // sample a handful of currently-active agents to consider for departure, rather than
+      // scanning the whole (possibly large) active set every tick
+      const sampleSize = Math.min(activeIds.size, 40);
+      const pool = agents.filter((a) => activeIds.has(a.id));
+      for (let i = 0; i < sampleSize; i++) {
+        const agent = pool[Math.floor(rand() * pool.length)];
+        if (!agent || !activeIds.has(agent.id)) continue;
+        if (rand() < departureProb) {
+          activeIds.delete(agent.id);
+          departures.push(agent.id);
+          state.get(agent.home).residents = Math.max(0, state.get(agent.home).residents - 1);
+        }
+      }
+    }
+
     actionsByKind.stay = N_AGENTS - moveCount - changeCount;
     if (actionsByKind.stay < 0) actionsByKind.stay = 0;
     gated = Math.round(N_AGENTS * 0.01 * rand());
@@ -302,6 +389,14 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
     const districtsSnapshot = DISTRICTS.map((d) => {
       const s = state.get(d.id);
       const residents = Math.max(1, s.residents);
+      const modeShare = {};
+      let modeTotal = 0;
+      for (const m of COMMUTE_MODES) {
+        const v = Math.max(0.01, (d.commute_mode_share[m] ?? 0.01) + (rand() - 0.5) * 0.01);
+        modeShare[m] = v;
+        modeTotal += v;
+      }
+      for (const m of COMMUTE_MODES) modeShare[m] = Math.round((modeShare[m] / modeTotal) * 1000) / 1000;
       return {
         id: d.id,
         avg_rent: Math.round(s.avg_rent * 100) / 100,
@@ -315,6 +410,13 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
         avg_satisfaction: Math.round(s.avg_satisfaction * 1000) / 1000,
         avg_rent_burden: Math.round(((s.avg_rent * 12) / (DISTRICTS.find((x) => x.id === d.id).income_per_capita_annual || 1)) * 1000) / 1000,
         rent_cap_active: capActive && d.id === "gracia",
+        tourist_units: s.tourist_units,
+        shops_open: Math.round(s.shops_open),
+        shop_revenue_monthly: s.shop_revenue_monthly,
+        mode_share: modeShare,
+        online_share: Math.round(s.online_share * 1000) / 1000,
+        arrivals: arrivals.filter((a) => a.home === d.id).length,
+        departures: departures.filter((id) => agents.find((a) => a.id === id)?.home === d.id).length,
       };
     });
 
@@ -354,13 +456,13 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
       changes,
       usage_tick: usageTick,
       usage_total: usageTotal,
+      arrivals,
+      departures,
     };
     ndjsonStream.write(JSON.stringify(record) + "\n");
     if (t === TICKS) finalDistricts = districtsSnapshot;
   }
   ndjsonStream.end();
-
-  void agentById; // kept for clarity of intent (agents mutated in place above)
 
   const meta = {
     run_id: runId,
@@ -384,7 +486,7 @@ function generateRun(runId, scenarioName, description, withRentCap, seed) {
   };
   writeFileSync(path.join(runDir, "summary.json"), JSON.stringify(summary, null, 2));
 
-  console.log(`  wrote ${runId}: ${TICKS} ticks, ${agents.length} agents, ${totalMoves} total moves`);
+  console.log(`  wrote ${runId}: ${TICKS} ticks, ${agents.length} initial agents, ${nextAgentId - N_AGENTS} arrivals, ${totalMoves} total moves`);
   return { run_id: runId, scenario: scenarioName, description, ticks: TICKS, n_agents: N_AGENTS };
 }
 
@@ -396,22 +498,39 @@ function initialAgentsSnapshot(runId) {
   return initialSnapshots.get(runId);
 }
 
-function generateRunWithSnapshot(runId, scenarioName, description, withRentCap, seed) {
-  return generateRun(runId, scenarioName, description, withRentCap, seed);
+function cloneAgent(a) {
+  return { ...a };
 }
 
 function ensureDistrictsGeojson() {
   mkdirSync(DATA_OUT, { recursive: true });
   const realPath = path.join(REPO_ROOT, "data", "processed", "districts.geojson");
   const outPath = path.join(DATA_OUT, "districts.geojson");
+  const allIds = new Set(DISTRICTS.map((d) => d.id));
+
+  let existingFeatures = [];
+  let hadReal = false;
   if (existsSync(realPath)) {
-    copyFileSync(realPath, outPath);
-    console.log("  copied real districts.geojson from data/processed/");
+    hadReal = true;
+    try {
+      const fc = JSON.parse(readFileSync(realPath, "utf-8"));
+      existingFeatures = fc.features ?? [];
+    } catch (err) {
+      console.warn(`  could not parse ${realPath}, treating as empty: ${err.message}`);
+    }
+  }
+  const haveIds = new Set(existingFeatures.map((f) => f.properties?.id).filter(Boolean));
+  const missingIds = [...allIds].filter((id) => !haveIds.has(id));
+
+  if (hadReal && missingIds.length === 0) {
+    writeFileSync(outPath, JSON.stringify({ type: "FeatureCollection", features: existingFeatures }, null, 2));
+    console.log("  copied real districts.geojson from data/processed/ (already has all 10 districts)");
     return;
   }
-  // Rough irregular-pentagon placeholders around each district centroid (~1.6km "radius").
+
+  // Rough irregular-pentagon placeholders around each missing district's centroid (~1.6km "radius").
   const R = 0.014;
-  const features = DISTRICTS.map((d) => {
+  const placeholderFeatures = DISTRICTS.filter((d) => missingIds.includes(d.id)).map((d) => {
     const [lon, lat] = d.centroid;
     const coords = [];
     const sides = 5 + Math.floor(Math.abs(Math.sin(lon * 97)) * 3); // 5-7 sides, deterministic per district
@@ -426,9 +545,15 @@ function ensureDistrictsGeojson() {
       geometry: { type: "Polygon", coordinates: [coords] },
     };
   });
+
+  const features = [...existingFeatures, ...placeholderFeatures];
   const fc = { type: "FeatureCollection", features };
   writeFileSync(outPath, JSON.stringify(fc, null, 2));
-  console.log("  wrote PLACEHOLDER districts.geojson (real data/processed/districts.geojson not found yet)");
+  if (hadReal) {
+    console.log(`  wrote districts.geojson: ${existingFeatures.length} real + ${placeholderFeatures.length} PLACEHOLDER districts (${missingIds.join(", ")})`);
+  } else {
+    console.log("  wrote PLACEHOLDER districts.geojson for all 10 districts (real data/processed/districts.geojson not found yet)");
+  }
 }
 
 function main() {
@@ -441,12 +566,12 @@ function main() {
   initialSnapshots.set("fake-rent-cap-gracia-001", makeAgents(rand2).map(cloneAgent));
 
   const entries = [];
-  entries.push(generateRunWithSnapshot("fake-base-001", "base", "Baseline Barcelona, no policy intervention. (fake dev data)", false, 42));
+  entries.push(generateRun("fake-base-001", "base", "Baseline Barcelona, no policy intervention. (fake dev data)", false, 42));
   entries.push(
-    generateRunWithSnapshot(
+    generateRun(
       "fake-rent-cap-gracia-001",
       "rent_cap_gracia",
-      "Rent cap in Gràcia from day 30 — capped at initial rent, renewals frozen. (fake dev data)",
+      "Rent cap in Gràcia from day 30, plus a HUT phase-out, a new transit line, and a low-emission zone later in the year. (fake dev data)",
       true,
       42,
     ),
@@ -455,10 +580,6 @@ function main() {
   writeFileSync(path.join(RUNS_OUT, "index.json"), JSON.stringify(entries, null, 2));
   ensureDistrictsGeojson();
   console.log(`Done. Wrote ${entries.length} runs to ${path.relative(REPO_ROOT, RUNS_OUT)}/`);
-}
-
-function cloneAgent(a) {
-  return { ...a };
 }
 
 main();

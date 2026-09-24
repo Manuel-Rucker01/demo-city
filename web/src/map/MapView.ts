@@ -8,10 +8,17 @@ import type { AgentSnapshot, DistrictId, DistrictSnapshot } from "../data/types"
 import { DISTRICT_IDS } from "../data/types";
 import type { DistrictsGeo } from "./districts";
 import { precomputeAgentPositions, precomputeAllDistrictPositions } from "./districts";
-import { DISTRICT_COLORS_RGB, EMPLOYED_COLOR, UNEMPLOYED_COLOR, viridis } from "../style/theme";
+import {
+  COMMUTE_MODE_COLORS,
+  COMMUTE_MODE_UNKNOWN_COLOR,
+  DISTRICT_COLORS_RGB,
+  EMPLOYED_COLOR,
+  UNEMPLOYED_COLOR,
+  viridis,
+} from "../style/theme";
 
-export type ColorMode = "district" | "employed" | "satisfaction";
-export type FillMetric = "avg_rent" | "unemployment_rate" | "avg_satisfaction";
+export type ColorMode = "district" | "employed" | "satisfaction" | "commute";
+export type FillMetric = "avg_rent" | "unemployment_rate" | "avg_satisfaction" | "tourist_units" | "shops_open";
 
 const BARCELONA_CENTER: [number, number] = [2.17, 41.4];
 const DARK_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
@@ -62,6 +69,15 @@ interface MoveAnim {
   durationMs: number;
 }
 
+interface FadeAnim {
+  startedAtMs: number;
+  durationMs: number;
+  /** "in" = arrival (fade in + settle at home), "out" = departure (fly toward city edge + fade). */
+  kind: "in" | "out";
+  srcPos: [number, number];
+  dstPos: [number, number];
+}
+
 export interface MapViewOptions {
   container: HTMLElement;
   geo: DistrictsGeo;
@@ -81,7 +97,14 @@ export class MapView {
   private homePositions: Float64Array; // current "home" position per agent, mutated on move settle
   private renderPositions: Float64Array; // jittered/interpolated positions actually drawn
   private colors: Uint8Array; // nAgents * 3
+  /** Base alpha per agent (0..235) from the active/inactive mask set by setAgentState — arrival
+   * fade-in / departure fade-out animations below temporarily override this while in flight. */
+  private baseAlpha: Uint8Array;
+  /** Alpha actually drawn this frame; recomputed every frame from baseAlpha + any fade anim. */
+  private renderAlpha: Uint8Array;
   private allDistrictPositions: Map<DistrictId, Float64Array>;
+  private cityBounds: [[number, number], [number, number]];
+  private cityCenter: [number, number];
 
   private colorMode: ColorMode = "district";
   private fillMetric: FillMetric = "avg_rent";
@@ -89,6 +112,7 @@ export class MapView {
   private fillDomain: [number, number] = [0, 1];
 
   private activeMoves: Map<number, MoveAnim> = new Map();
+  private fadeAnims: Map<number, FadeAnim> = new Map();
   private rafHandle = 0;
   private frameCounter = 0;
   private jitterEnabled = true;
@@ -104,11 +128,18 @@ export class MapView {
     this.homePositions = precomputeAgentPositions(opts.agents, opts.geo);
     this.renderPositions = new Float64Array(this.homePositions); // one-time copy, then mutated in place
     this.colors = new Uint8Array(opts.agents.length * 3);
+    this.baseAlpha = new Uint8Array(opts.agents.length).fill(235);
+    this.renderAlpha = new Uint8Array(opts.agents.length).fill(235);
     this.allDistrictPositions = precomputeAllDistrictPositions(
       opts.agents.map((a) => a.id),
       opts.geo,
       [...DISTRICT_IDS],
     );
+    this.cityBounds = districtsBounds(opts.geo);
+    this.cityCenter = [
+      (this.cityBounds[0][0] + this.cityBounds[1][0]) / 2,
+      (this.cityBounds[0][1] + this.cityBounds[1][1]) / 2,
+    ];
     this.recolorAll();
     this.agentDataHandle = { length: opts.agents.length };
 
@@ -129,7 +160,7 @@ export class MapView {
     // Fit the camera to the real bounds of all district polygons (padded) instead of a
     // hand-picked center/zoom, so the northern district (Nou Barris) isn't cropped off-screen —
     // both split maps use the same geo, so they end up framed identically ("synced").
-    const bounds = districtsBounds(opts.geo);
+    const bounds = this.cityBounds;
     this.map.fitBounds(bounds, { padding: 48, duration: 0 });
     this.map.on("load", () => {
       this.map.fitBounds(bounds, { padding: 48, duration: 0 });
@@ -160,11 +191,16 @@ export class MapView {
   private metricValue(s: DistrictSnapshot): number {
     if (this.fillMetric === "avg_rent") return s.avg_rent;
     if (this.fillMetric === "unemployment_rate") return s.unemployment_rate;
-    return s.avg_satisfaction;
+    if (this.fillMetric === "avg_satisfaction") return s.avg_satisfaction;
+    if (this.fillMetric === "tourist_units") return s.tourist_units ?? 0;
+    return s.shops_open ?? 0;
   }
 
-  /** Apply the current per-agent state (home district, employed, satisfaction) for one frame. */
-  setAgentState(home: Uint8Array, employed: Uint8Array, satisfaction: Float32Array): void {
+  /** Apply the current per-agent state (home district, employed, satisfaction, active) for one
+   * frame. `active` follows frameAt's convention: 1 = present in the city at this tick. Agents
+   * with an in-flight arrival/departure animation keep animating (handled in
+   * updateRenderPositions) even though their base alpha already reflects the new state. */
+  setAgentState(home: Uint8Array, employed: Uint8Array, satisfaction: Float32Array, active?: Uint8Array): void {
     for (let i = 0; i < this.agents.length; i++) {
       const did = DISTRICT_IDS[home[i]!]!;
       const arr = this.allDistrictPositions.get(did);
@@ -172,7 +208,8 @@ export class MapView {
         this.homePositions[i * 2] = arr[i * 2]!;
         this.homePositions[i * 2 + 1] = arr[i * 2 + 1]!;
       }
-      this.setColorFor(i, did, employed[i] === 1, satisfaction[i]!);
+      this.setColorFor(i, did, employed[i] === 1, satisfaction[i]!, this.agents[i]!.commute_mode ?? null);
+      this.baseAlpha[i] = !active || active[i] === 1 ? 235 : 0;
     }
   }
 
@@ -197,15 +234,54 @@ export class MapView {
     this.homePositions[idx * 2 + 1] = dstPos[1];
   }
 
+  /** New household settling in the city: fades in at their home district position. */
+  animateArrival(agentId: number, home: DistrictId, durationMs = 1200): void {
+    const idx = this.agentIdToIndex.get(agentId);
+    if (idx === undefined) return;
+    const arr = this.allDistrictPositions.get(home);
+    const pos: [number, number] = arr ? [arr[idx * 2]!, arr[idx * 2 + 1]!] : [this.homePositions[idx * 2]!, this.homePositions[idx * 2 + 1]!];
+    this.homePositions[idx * 2] = pos[0];
+    this.homePositions[idx * 2 + 1] = pos[1];
+    this.renderPositions[idx * 2] = pos[0];
+    this.renderPositions[idx * 2 + 1] = pos[1];
+    this.fadeAnims.set(idx, { startedAtMs: performance.now(), durationMs, kind: "in", srcPos: pos, dstPos: pos });
+  }
+
+  /** Household leaving Barcelona: flies out from their current position toward the nearest city
+   * boundary (away from the city center, past the district bounds) while fading out. */
+  animateDeparture(agentId: number, durationMs = 1500): void {
+    const idx = this.agentIdToIndex.get(agentId);
+    if (idx === undefined) return;
+    const srcPos: [number, number] = [this.renderPositions[idx * 2]!, this.renderPositions[idx * 2 + 1]!];
+    const dx = srcPos[0] - this.cityCenter[0];
+    const dy = srcPos[1] - this.cityCenter[1];
+    const mag = Math.hypot(dx, dy) || 1e-6;
+    const [w, h] = [
+      this.cityBounds[1][0] - this.cityBounds[0][0],
+      this.cityBounds[1][1] - this.cityBounds[0][1],
+    ];
+    const reach = Math.max(w, h) * 0.6; // well past the city bounds edge in that direction
+    const dstPos: [number, number] = [srcPos[0] + (dx / mag) * reach, srcPos[1] + (dy / mag) * reach];
+    this.fadeAnims.set(idx, { startedAtMs: performance.now(), durationMs, kind: "out", srcPos, dstPos });
+  }
+
   setJitterEnabled(enabled: boolean): void {
     this.jitterEnabled = enabled;
   }
 
-  private setColorFor(i: number, district: DistrictId, employed: boolean, satisfaction: number): void {
+  private setColorFor(
+    i: number,
+    district: DistrictId,
+    employed: boolean,
+    satisfaction: number,
+    commuteMode: string | null,
+  ): void {
     let rgb: [number, number, number];
     if (this.colorMode === "district") rgb = DISTRICT_COLORS_RGB[district];
     else if (this.colorMode === "employed") rgb = employed ? EMPLOYED_COLOR : UNEMPLOYED_COLOR;
-    else rgb = viridis(satisfaction);
+    else if (this.colorMode === "commute") {
+      rgb = commuteMode ? (COMMUTE_MODE_COLORS[commuteMode] ?? COMMUTE_MODE_UNKNOWN_COLOR) : COMMUTE_MODE_UNKNOWN_COLOR;
+    } else rgb = viridis(satisfaction);
     this.colors[i * 3] = rgb[0];
     this.colors[i * 3 + 1] = rgb[1];
     this.colors[i * 3 + 2] = rgb[2];
@@ -213,7 +289,8 @@ export class MapView {
 
   private recolorAll(): void {
     for (let i = 0; i < this.agents.length; i++) {
-      this.setColorFor(i, this.agents[i]!.home, this.agents[i]!.employed, this.agents[i]!.satisfaction);
+      const a = this.agents[i]!;
+      this.setColorFor(i, a.home, a.employed, a.satisfaction, a.commute_mode ?? null);
     }
   }
 
@@ -258,6 +335,27 @@ export class MapView {
         if (progress >= 1) this.activeMoves.delete(agentId);
       }
     }
+
+    // Alpha defaults to the active/inactive base every frame, then arrival/departure fades
+    // (and, for departures, a flight toward the city edge) override it while in flight.
+    this.renderAlpha.set(this.baseAlpha);
+    if (this.fadeAnims.size > 0) {
+      for (const [idx, anim] of this.fadeAnims) {
+        const progress = Math.min(1, (now - anim.startedAtMs) / anim.durationMs);
+        if (anim.kind === "in") {
+          const eased = 1 - Math.pow(1 - progress, 2);
+          this.renderAlpha[idx] = Math.round(235 * eased);
+        } else {
+          const eased = progress * progress; // ease-in: lingers visible briefly, then accelerates out
+          const lon = anim.srcPos[0] + (anim.dstPos[0] - anim.srcPos[0]) * eased;
+          const lat = anim.srcPos[1] + (anim.dstPos[1] - anim.srcPos[1]) * eased;
+          this.renderPositions[idx * 2] = lon;
+          this.renderPositions[idx * 2 + 1] = lat;
+          this.renderAlpha[idx] = Math.round(235 * (1 - progress));
+        }
+        if (progress >= 1) this.fadeAnims.delete(idx);
+      }
+    }
   }
 
   private buildAgentLayer(): ScatterplotLayer {
@@ -273,7 +371,7 @@ export class MapView {
         this.colors[index * 3]!,
         this.colors[index * 3 + 1]!,
         this.colors[index * 3 + 2]!,
-        235,
+        this.renderAlpha[index]!,
       ],
       // Larger, brighter dots so they read clearly over the (now much subtler) choropleth fill.
       getRadius: 12,
