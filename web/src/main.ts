@@ -169,7 +169,10 @@ interface RunSlot {
 
 let slots: RunSlot[] = [];
 let playback: Playback | null = null;
-let colorMode: ColorMode = "district";
+// Optional initial dot colouring from the URL (e.g. ?color=commute), used by recording mode.
+const COLOR_MODES: readonly ColorMode[] = ["district", "employed", "satisfaction", "commute"];
+const colorParam = new URLSearchParams(window.location.search).get("color") as ColorMode | null;
+let colorMode: ColorMode = colorParam && COLOR_MODES.includes(colorParam) ? colorParam : "district";
 let fillMetric: FillMetric = "avg_rent";
 let lastTickIndex = 0;
 let compareMode = false;
@@ -246,9 +249,12 @@ async function setup(baseRunId: string, compareRunId: string | null): Promise<vo
       playback?.setSpeed(Math.max(1, Math.min(10, record.speed)) as SpeedMultiplier);
       playback?.play();
     }, 1000);
+    const lastTick = slots[0]?.loaded.ticks.length ?? 0;
     const unsub = playback.onChange((s) => {
       const primary = slots[0]?.loaded.ticks[s.tickIndex - 1];
       if (primary) overlay.setDate(primary.date);
+      // Signal for tools/recorder: the whole run has been played.
+      if (lastTick && s.tickIndex >= lastTick) (window as unknown as { __jevcityDone?: boolean }).__jevcityDone = true;
     });
     void unsub;
   }
