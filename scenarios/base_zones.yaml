@@ -8,3 +8,5 @@ description: >-
   variant stays "base" throughout -- this scenario is for the zone/trip-time machinery on its
   own, without a line opening.
 access_path: data/processed/transit_access.json
+prompt:
+  event_wording: v2   # reworded payday / arrival / partner events (docs/BACKLOG.md); new baseline only

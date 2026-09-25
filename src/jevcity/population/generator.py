@@ -763,6 +763,7 @@ def spawn_arrivals(
             agent.home_zone = network.sample_home_zone(world.access, agent.home, rng)
             if agent.employed and agent.job_district is not None:
                 agent.job_zone = network.sample_job_zone(world.access, agent.job_district, rng)
+            network.repair_commute_mode(world, agent)
 
     return agents
 

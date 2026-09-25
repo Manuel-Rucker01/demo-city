@@ -234,3 +234,28 @@ def new_access_share(world: World, zone: ZoneId, variant: str) -> float:
     if i is None:
         return 0.0
     return access.zones[i].new_coverage.get(variant, 0.0)
+
+
+# A usual commute on foot or by bike longer than this is implausible (EMEF 2024: the average walking
+# trip in Barcelona is well under 20 min). District-level quotas assign modes without distances,
+# so with zones some agents would "walk" 99 minutes; repair_commute_mode moves them to transit.
+WALK_COMMUTE_MAX_MIN = 35.0
+BIKE_COMMUTE_MAX_MIN = 45.0
+
+
+def repair_commute_mode(world: World, agent: Agent) -> bool:
+    """With zones: turn an implausibly long usual walk/bike commute into the faster of metro and bus
+    (deterministic, no rng draw, commute_since_tick kept). Returns True if the mode changed. No-op
+    without world.access, without zones, or for any other mode."""
+    from jevcity.types import CommuteMode
+
+    if agent.commute_mode not in (CommuteMode.WALK, CommuteMode.BIKE):
+        return False
+    times = agent_trip_minutes(world, agent)
+    if times is None:
+        return False
+    limit = WALK_COMMUTE_MAX_MIN if agent.commute_mode is CommuteMode.WALK else BIKE_COMMUTE_MAX_MIN
+    if times.get(agent.commute_mode.value, 0.0) <= limit:
+        return False
+    agent.commute_mode = CommuteMode.METRO if times.get("metro", 1e9) <= times.get("bus", 1e9) else CommuteMode.BUS
+    return True

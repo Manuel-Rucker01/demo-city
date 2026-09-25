@@ -121,6 +121,7 @@ async def run_simulation(
     agents_list = generator.generate_population(profiles, scenario.n_agents, rng)
     agents_by_id = {a.id: a for a in agents_list}
     world = market.init_world(profiles, agents_list)
+    world.event_wording = scenario.prompt.event_wording
 
     # Zone-level transit network (docs/TRANSIT_ACCESS.md section 2): entirely opt-in via
     # scenario.access_path, so a scenario that doesn't set it consumes no extra rng draws and
@@ -134,6 +135,7 @@ async def run_simulation(
             agent.home_zone = network.sample_home_zone(access, agent.home, rng)
             if agent.employed and agent.job_district is not None:
                 agent.job_zone = network.sample_job_zone(access, agent.job_district, rng)
+            network.repair_commute_mode(world, agent)
 
     writer = runlog_writer.RunWriter(run_dir)
 

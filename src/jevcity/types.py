@@ -171,6 +171,7 @@ class World:
     rent_history: dict[DistrictId, list[float]] | None = None  # avg_rent at each month boundary
     access: TransitAccess | None = None  # zones + door-to-door times (Scenario.access_path); None = district-only model
     network_variant: str = "base"  # TransitAccess variant in effect this tick (set by apply_policies)
+    event_wording: str = "v1"  # PromptParams.event_wording, copied here for the state builder
 
 
 # --- Agents --------------------------------------------------------------------------------
@@ -576,6 +577,11 @@ class MigrationParams(BaseModel):
 
 class PromptParams(BaseModel):
     max_districts_in_state: int = 5  # home + job + most relevant affordable alternatives
+    event_wording: Literal["v1", "v2"] = "v1"
+    # v2 rewords three events that small and large models read literally (measured on 206 real
+    # Jev calls, docs/BACKLOG.md): "Today is payday." read as "spend"; "You just moved into
+    # Barcelona." / "You've moved in with a partner." read as "move again". v1 stays the default
+    # so published runs stay reproducible.
 
 
 class Scenario(BaseModel):

@@ -355,6 +355,7 @@ def apply_decisions(
                         transport.switch_mode_on_move(agent, tick)
                         if world.access is not None:
                             agent.home_zone = network.sample_home_zone(world.access, agent.home, rng)
+                            network.repair_commute_mode(world, agent)
         elif decision.action == Action.JOB_SEARCH and not agent.employed:
             home_state = world.states.get(agent.home)
             best_state = None
@@ -379,6 +380,7 @@ def apply_decisions(
                     job_matches += 1
                     if world.access is not None:
                         agent.job_zone = network.sample_job_zone(world.access, best_state.id, rng)
+                        network.repair_commute_mode(world, agent)
 
         # Always: spending_level nudged toward the decision's answer, satisfaction updated.
         agent.spending_level = clip(0.5 * agent.spending_level + 0.5 * decision.spending, 0.0, 1.0)

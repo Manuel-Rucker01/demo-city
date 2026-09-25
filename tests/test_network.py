@@ -824,3 +824,43 @@ def test_usual_trip_text_shows_only_the_usual_mode():
     assert usual_trip_text(times, "metro") == "usual: metro ~38min"
     assert usual_trip_text(times, "car") == "usual: car ~25min+parking"
     assert usual_trip_text({"metro": 10.0}, "walk") is None
+
+
+def test_repair_commute_mode_moves_implausible_walks_to_transit():
+    world = _world10_like()
+    agent = make_agent(1, "d1", employed=True, job_district="d2", home_zone="z1", job_zone="z4")
+    times = network.agent_trip_minutes(world, agent)
+    agent.commute_mode = CommuteMode.WALK
+    changed = network.repair_commute_mode(world, agent)
+    if times["walk"] > network.WALK_COMMUTE_MAX_MIN:
+        assert changed and agent.commute_mode in (CommuteMode.METRO, CommuteMode.BUS)
+    else:
+        assert not changed and agent.commute_mode is CommuteMode.WALK
+    no_zones = make_agent(2, "d1", employed=True, job_district="d2")
+    no_zones.commute_mode = CommuteMode.WALK
+    assert not network.repair_commute_mode(world, no_zones)
+
+
+def test_repair_commute_mode_keeps_short_walks_and_other_modes():
+    world = _world10_like()
+    agent = make_agent(1, "d1", employed=True, job_district="d2", home_zone="z1", job_zone="z4")
+    agent.commute_mode = CommuteMode.CAR
+    assert not network.repair_commute_mode(world, agent)
+
+
+def test_event_wording_v2_rewords_literal_events_and_v1_is_unchanged():
+    from jevcity.prompts.state_builder import _event_sentence
+    from jevcity.types import Event, EventKind
+
+    world = _world10_like()
+    pay = Event(agent_id=1, kind=EventKind.PAYDAY)
+    partner = Event(agent_id=1, kind=EventKind.LIFE_EVENT, payload={"kind": "partner"})
+    arrived = Event(agent_id=1, kind=EventKind.ARRIVED)
+    assert world.event_wording == "v1"
+    assert _event_sentence(pay, world) == "Today is payday."
+    assert _event_sentence(partner, world) == "You've moved in with a partner."
+    assert _event_sentence(arrived, world) == "You just moved into Barcelona."
+    world.event_wording = "v2"
+    assert "salary" in _event_sentence(pay, world)
+    assert "moved" not in _event_sentence(partner, world)
+    assert "moved" not in _event_sentence(arrived, world)

@@ -182,13 +182,16 @@ def _event_sentence(event: Event, world: World) -> str:
         name = world.profiles[district].name if district in world.profiles else district
         wage = round(float(p.get("wage", 0.0)))
         return f"You received a job offer in {name} paying €{wage}/month."
+    v2 = world is not None and world.event_wording == "v2"
     if event.kind is EventKind.PAYDAY:
-        return "Today is payday."
+        return "Your monthly salary arrived today, as it does every month." if v2 else "Today is payday."
     if event.kind is EventKind.RENT_BURDEN:
         burden = round(float(p.get("burden", 0.0)) * 100)
         return f"Your rent now takes {burden}% of your income."
     if event.kind is EventKind.LIFE_EVENT:
         kind = str(p.get("kind", ""))
+        if kind == "partner" and world is not None and world.event_wording == "v2":
+            return "Your partner has come to live with you in your current home."
         return _LIFE_EVENT_TEXT.get(kind, "Something changed in your life today.")
     if event.kind is EventKind.SCHOOL_YEAR:
         return "The school year is starting for your children."
@@ -214,6 +217,8 @@ def _event_sentence(event: Event, world: World) -> str:
     if event.kind is EventKind.TOURISM_PRESSURE:
         return "Tourist flats are increasing in your neighbourhood."
     if event.kind is EventKind.ARRIVED:
+        if world is not None and world.event_wording == "v2":
+            return "You arrived in Barcelona recently and have just settled into your current home."
         return "You just moved into Barcelona."
     return "Something happened today."
 
