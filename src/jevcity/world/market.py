@@ -402,6 +402,10 @@ def apply_decisions(
         )
 
         transport.apply_commute_decision(agent, decision.commute_mode, tick)
+        if world.access is not None:
+            # A walk/bike answer for a trip far too long to walk or cycle daily is treated like CAR
+            # without a car: the agent takes transit instead (network.repair_commute_mode).
+            network.repair_commute_mode(world, agent)
         if decision.shopping_place is not None:
             agent.shopping_place = decision.shopping_place
 
