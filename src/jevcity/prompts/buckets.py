@@ -314,7 +314,21 @@ def lez_note_text(car_cost_extra_monthly: float) -> str:
 WALK_TRIP_MAX_MINUTES = 60  # walk mode dropped from trip_to_work beyond this
 
 
+def usual_trip_text(times: dict[str, float], mode: str) -> str | None:
+    """The person block's `trip_to_work`: only the agent's usual mode, e.g. "usual: metro ~38min".
+    Listing every mode's time (trip_times_text) was measured to break commute habits: on the same
+    200 commute decisions Jev kept the current mode 61% of the time with the full list vs 99%
+    without times, doubling metro and multiplying bike x7 (bench/results_trip, 2026-09-25). A new
+    line's gain reaches the people it helps through their TRANSIT_CHANGE event instead, which
+    carries their own before/after minutes. None when the usual mode has no time."""
+    minutes = times.get(mode)
+    if minutes is None:
+        return None
+    return f"usual: {mode} ~{round(minutes)}min" + ("+parking" if mode == "car" else "")
+
+
 def trip_times_text(times: dict[str, float], *, has_car: bool) -> str:
+    # Not used in prompts (see usual_trip_text); kept for experiments comparing prompt formats.
     """Compact door-to-door commute line for the person block's `trip_to_work` field, e.g.
     "metro 38min, bus 44min, car 25min+parking, bike 24min, walk 70min". `walk` beyond
     WALK_TRIP_MAX_MINUTES is dropped, `car` is dropped unless has_car. Modes appear in

@@ -24,7 +24,7 @@ from conftest import make_profiles
 from jevcity.engine.loop import run_simulation
 from jevcity.events.triggers import detect_events
 from jevcity.jev.meter import estimate_tokens
-from jevcity.prompts.buckets import trip_times_text
+from jevcity.prompts.buckets import trip_times_text, usual_trip_text
 from jevcity.prompts.questions import mock_priors_for_agent
 from jevcity.prompts.state_builder import _person_block, build_state_k1
 from jevcity.runlog.reader import RunReader
@@ -33,6 +33,7 @@ from jevcity.types import (
     Action,
     Agent,
     AgentDecision,
+    CommuteMode,
     DistrictId,
     DistrictProfile,
     DistrictState,
@@ -624,20 +625,23 @@ def test_person_block_has_trip_to_work_only_with_both_zones():
     world = _world10_like()
     with_zones = make_agent(1, "d1", employed=True, job_district="d2", home_zone="z1", job_zone="z4")
     without_zones = make_agent(2, "d1", employed=True, job_district="d2")
+    with_zones.commute_mode = CommuteMode.METRO  # trip_to_work shows the usual mode only
 
     block_with = _person_block(with_zones, world, tick=10)
     block_without = _person_block(without_zones, world, tick=10)
 
     assert "trip_to_work" in block_with
-    assert block_with["trip_to_work"] == trip_times_text(
-        network.agent_trip_minutes(world, with_zones), has_car=with_zones.has_car
+    assert block_with["trip_to_work"] == usual_trip_text(
+        network.agent_trip_minutes(world, with_zones), with_zones.commute_mode.value
     )
+    assert block_with["trip_to_work"].startswith("usual: ")
     assert "trip_to_work" not in block_without
 
 
 def test_build_state_k1_includes_trip_to_work():
     world = _world10_like()
     agent = make_agent(1, "d1", employed=True, job_district="d2", home_zone="z1", job_zone="z4")
+    agent.commute_mode = CommuteMode.METRO
     state = build_state_k1(world, agent, [], tick=10, district_ids=["d1", "d2"])
     assert "trip_to_work" in state["person"]
 
@@ -813,3 +817,10 @@ def test_lez_transit_change_is_described_as_lez_not_metro():
 
     ev = Event(agent_id=1, kind=EventKind.TRANSIT_CHANGE, payload={"kind": "low_emission_zone"})
     assert "low-emission zone" in _event_sentence(ev, None)  # world unused for this kind
+
+
+def test_usual_trip_text_shows_only_the_usual_mode():
+    times = {"metro": 38.4, "bus": 44.0, "car": 25.2, "bike": 23.6, "walk": 40.0}
+    assert usual_trip_text(times, "metro") == "usual: metro ~38min"
+    assert usual_trip_text(times, "car") == "usual: car ~25min+parking"
+    assert usual_trip_text({"metro": 10.0}, "walk") is None

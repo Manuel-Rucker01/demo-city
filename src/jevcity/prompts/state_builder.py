@@ -61,7 +61,7 @@ from jevcity.prompts.buckets import (
     shops_trend_label,
     tourism_label,
     transit_bucket_text,
-    trip_times_text,
+    usual_trip_text,
     vacancy_text,
     work_text,
     years_in_home_text,
@@ -240,8 +240,10 @@ def _person_block(agent: Agent, world: World, tick: int) -> dict:
         # trip length is already implicit in the home district's `jobs` "commute" field.
         block["commute"] = f"{agent.commute_mode.value}, {commute_habit_text(tick, agent.commute_since_tick)}"
     times = network.agent_trip_minutes(world, agent)
-    if times is not None:
-        block["trip_to_work"] = trip_times_text(times, has_car=agent.has_car)
+    if times is not None and agent.commute_mode is not None:
+        usual = usual_trip_text(times, agent.commute_mode.value)
+        if usual is not None:
+            block["trip_to_work"] = usual
     return block
 
 

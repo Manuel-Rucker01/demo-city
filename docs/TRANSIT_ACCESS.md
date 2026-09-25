@@ -116,12 +116,14 @@ must stay byte-identical to today, and the tests prove it.
 - **Event texts** (state_builder, compact):
   - `"The new {line} opened: your trip to work by metro now takes ~{a} min instead of ~{b}."`
   - `"A new {line} station opened within walking distance of your home."`
-- **Person block:** when the agent has trip times, add
-  `"trip_to_work": "metro 38min, bus 44min, car 25min+parking, bike 24min, walk 70min"`.
-  - Rounded to whole minutes, in `modes` order.
-  - Car only if `has_car`. Walk only if ≤ 60 min.
-  - This lives in `prompts/buckets.py` as `trip_times_text(times, *, has_car)`.
-  - The existing `commute` field (mode + habit) stays.
+- **Person block:** when the agent has trip times and a usual commute mode, add
+  `"trip_to_work": "usual: metro ~38min"` (car adds `+parking`) — the usual mode only
+  (`prompts/buckets.py` `usual_trip_text`). The full per-mode list (`trip_times_text`, e.g.
+  `"metro 38min, bus 44min, car 25min+parking, bike 24min"`) was tested and rejected: on the same
+  200 commute decisions Jev kept its current mode 99% of the time without times or with the usual
+  trip only, but 61% with the full list (metro share doubled, bike ×7). A new line's time gain
+  reaches the people it helps through their own TRANSIT_CHANGE event, which carries before/after
+  minutes.
 - **District blocks (destination choice):** a district with `new_coverage > 0` in the active variant
   gets `", new {line} stations"` appended to its `transit` field, where `{line}` is the policy label.
 - **Mock priors (commute_mode):** when times exist, use a prior proportional to
