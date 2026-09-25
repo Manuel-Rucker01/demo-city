@@ -1,0 +1,10 @@
+extends: base.yaml
+name: base_zones
+description: >-
+  Same as base.yaml, but with the zone-level transit network loaded (docs/TRANSIT_ACCESS.md):
+  agents get a home_zone/job_zone barri and door-to-door trip times by mode. This is the new
+  baseline that scenarios wanting a real metro line (e.g. l9_central.yaml) extend, since
+  TransitNetworkPolicy needs access_path set. No TransitNetworkPolicy here, so the network
+  variant stays "base" throughout -- this scenario is for the zone/trip-time machinery on its
+  own, without a line opening.
+access_path: data/processed/transit_access.json

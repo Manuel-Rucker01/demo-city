@@ -52,6 +52,25 @@ plain loop over the (typically small) set of triggered agents.
   payload `closed_pct = (prev - cur) / prev`.
 - ARRIVED is emitted by the engine when it calls `population.generator.spawn_arrivals`, not
   by this module.
+- TRANSIT_CHANGE / network variant (docs/TRANSIT_ACCESS.md section 2, only when `world.access`
+  is set): `world/market.py`'s `apply_policies` sets `world.network_variant` and a private
+  `world._network_policy` cache every tick (the currently active `TransitNetworkPolicy`, if
+  any). Another lazily-seeded cache, `world._prev_network_variant`, detects the variant
+  actually changing tick over tick (same lazy-first-seen pattern as the other district-level
+  caches above: no firing on the tick the cache is first populated). When it changes, every
+  active agent with a `home_zone` is checked once, using the *same* `_awareness_offset`
+  spreading mechanism (same `kind` used as the seed) but a dedicated pending-events cache
+  (`world._pending_network_awareness`, dict[tick -> list[Event]]) since, unlike `new_line`/
+  `low_emission_zone`, the payload (before/after minutes, or the line label) is agent-specific
+  and computed once at detection time rather than re-derived when the event fires:
+  - An employed agent whose `home_zone -> job_zone` metro trip gets at least
+    `policy.min_gain_minutes` shorter (`trip_minutes` before vs. after the variant switch)
+    gets `kind="network"`, payload `{"kind": "network", "line": label, "before_min": b,
+    "after_min": a}`.
+  - Any other agent (including an employed agent who didn't gain enough) gets
+    `kind="network_access"`, payload `{"kind": "network_access", "line": label}`, drawn with
+    probability `new_access_share(world, home_zone, variant)` using a deterministic hash of
+    `(agent_id, variant)` (`_network_access_draw`, same style as `_awareness_offset`).
 """
 
 from __future__ import annotations
@@ -61,6 +80,7 @@ import hashlib
 import numpy as np
 
 from jevcity.types import Agent, DistrictId, Event, EventKind, EventParams, Tenure, World
+from jevcity.world import network
 from jevcity.world._helpers import clip, is_working_age
 
 JOB_OFFER_VACANCY_SCALE = 10.0
@@ -79,6 +99,15 @@ def _awareness_offset(agent_id: int, kind: str, start_tick: int, awareness_days:
         return 0
     digest = hashlib.sha256(f"{agent_id}:{kind}:{start_tick}".encode()).digest()
     return int.from_bytes(digest[:8], "big") % awareness_days
+
+
+def _network_access_draw(agent_id: int, variant: str) -> float:
+    """Deterministic pseudo-random float in [0, 1) for agent_id's network_access draw against
+    `new_access_share`, seeded like `_awareness_offset` but by (agent_id, variant) -- there's
+    no single `start_tick` here since a zone's new_coverage is a property of the variant, not
+    of when the policy that activated it started."""
+    digest = hashlib.sha256(f"{agent_id}:{variant}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") / 2.0**64
 
 
 def detect_events(
@@ -147,6 +176,62 @@ def detect_events(
     due_today: dict[int, list[str]] = {}
     for aid, kind in pending_transit.pop(tick, []):
         due_today.setdefault(aid, []).append(kind)
+
+    # --- network variant change (docs/TRANSIT_ACCESS.md section 2; see module docstring) ---
+    # Entirely gated on world.access so a district-only scenario draws nothing extra here.
+    network_events_due: list[Event] = []
+    if world.access is not None:
+        pending_network: dict[int, list[Event]] | None = getattr(
+            world, "_pending_network_awareness", None
+        )
+        if pending_network is None:
+            pending_network = {}
+            world._pending_network_awareness = pending_network  # type: ignore[attr-defined]
+        network_events_due = pending_network.pop(tick, [])
+
+        prev_variant: str | None = getattr(world, "_prev_network_variant", None)
+        first_variant_seen = prev_variant is None
+        cur_variant = world.network_variant
+        if not first_variant_seen and cur_variant != prev_variant:
+            policy = getattr(world, "_network_policy", None)
+            if policy is not None and policy.variant == cur_variant:
+                label = policy.label
+                min_gain = policy.min_gain_minutes
+                for aid in agent_ids:
+                    agent = agents[aid]
+                    home_zone = agent.home_zone
+                    if home_zone is None:
+                        continue
+                    kind: str | None = None
+                    payload: dict[str, float | str] = {}
+                    if agent.employed and agent.job_zone is not None:
+                        before = network.trip_minutes(world, home_zone, agent.job_zone, prev_variant).get(
+                            "metro"
+                        )
+                        after = network.trip_minutes(world, home_zone, agent.job_zone, cur_variant).get(
+                            "metro"
+                        )
+                        if before is not None and after is not None and (before - after) >= min_gain:
+                            kind = "network"
+                            payload = {
+                                "kind": "network",
+                                "line": label,
+                                "before_min": before,
+                                "after_min": after,
+                            }
+                    if kind is None:
+                        share = network.new_access_share(world, home_zone, cur_variant)
+                        if share > 0.0 and _network_access_draw(aid, cur_variant) < share:
+                            kind = "network_access"
+                            payload = {"kind": "network_access", "line": label}
+                    if kind is not None:
+                        offset = _awareness_offset(aid, kind, tick, params.transit_awareness_days)
+                        ev = Event(agent_id=aid, kind=EventKind.TRANSIT_CHANGE, payload=payload)
+                        if offset == 0:
+                            network_events_due.append(ev)
+                        else:
+                            pending_network.setdefault(tick + offset, []).append(ev)
+        world._prev_network_variant = cur_variant  # type: ignore[attr-defined]
 
     transit_changed: set[DistrictId] = set()
     lez_started: set[DistrictId] = set()
@@ -295,4 +380,5 @@ def detect_events(
                 Event(agent_id=aid, kind=EventKind.SHOP_CLOSED, payload={"closed_pct": closed_pct})
             )
 
+    events.extend(network_events_due)
     return events

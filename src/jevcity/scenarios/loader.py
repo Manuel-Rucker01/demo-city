@@ -104,6 +104,19 @@ def _resolve_data_path(scenario: Scenario, scenario_file: Path) -> None:
         scenario.data_path = str(candidate)
 
 
+def _resolve_access_path(scenario: Scenario, scenario_file: Path) -> None:
+    """Same resolution rule as `_resolve_data_path`, for `access_path` (see docs/TRANSIT_ACCESS.md
+    section 2). A no-op when `access_path` is unset."""
+    if scenario.access_path is None:
+        return
+    p = Path(scenario.access_path)
+    if p.is_absolute() or p.exists():
+        return
+    candidate = _repo_root() / p
+    if candidate.exists():
+        scenario.access_path = str(candidate)
+
+
 def load_scenario(path: str | Path) -> Scenario:
     """Load YAML; supports `extends: base.yaml` (relative path) with deep merge, child wins."""
     path = Path(path)
@@ -117,4 +130,5 @@ def load_scenario(path: str | Path) -> Scenario:
 
     scenario = Scenario(**data)
     _resolve_data_path(scenario, path)
+    _resolve_access_path(scenario, path)
     return scenario

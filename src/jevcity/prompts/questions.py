@@ -11,6 +11,7 @@ see state_builder.wants_commute_question / wants_shopping_question.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 
 from jevcity.prompts.buckets import (
@@ -32,6 +33,9 @@ from jevcity.types import (
     Tenure,
     World,
 )
+from jevcity.world import network
+
+TRIP_TIME_PRIOR_DECAY_MINUTES = 12.0  # weight ~ exp(-minutes / this), see _commute_mode_weights
 
 OWNER_MOVE_PRIOR_FACTOR = 0.2  # owners are much less likely to move than renters
 TICKS_PER_YEAR = 360  # kept in sync with population/generator.py and buckets.py
@@ -252,7 +256,7 @@ def mock_priors_for_agent(
         "destination": dest_w,
         "spending": {str(i): w for i, w in enumerate(spending_w)},
         "satisfaction": {str(i): w for i, w in enumerate(sat_w)},
-        "commute_mode": _commute_mode_weights(agent, world.tick),
+        "commute_mode": _commute_mode_weights(agent, world),
         "shopping_place": _shopping_place_weights(),
     }
 
@@ -277,12 +281,18 @@ def _destination_weights(
     return weights
 
 
-def _commute_mode_weights(agent: Agent, tick: int) -> dict[str, float]:
+def _commute_mode_weights(agent: Agent, world: World) -> dict[str, float]:
     """Mock priors for the commute_mode question. Beyond the plain mode-popularity weights,
     a commuter's *current* mode gets extra "sticky" weight proportional to how long they've
     been doing it (Agent.commute_since_tick) -- people who've commuted the same way for years
     are less likely to switch than one about to try something new (see the metro-line launch
-    realism fix in the final report: without this, mock runs over-predict mode switching)."""
+    realism fix in the final report: without this, mock runs over-predict mode switching).
+
+    docs/TRANSIT_ACCESS.md section 2: when this agent has zone-level trip times (world.access
+    set, employed, both zones known), that habit-weighted prior is blended 50/50 with a prior
+    proportional to exp(-minutes / TRIP_TIME_PRIOR_DECAY_MINUTES) over the allowed modes --
+    faster modes get more weight, on top of (not instead of) habit stickiness. A no-op (the
+    plain habit-weighted prior, unchanged) whenever agent_trip_minutes returns None."""
     modes = [m for m in CommuteMode if agent.has_car or m is not CommuteMode.CAR]
     weights = {m.value: 1.0 for m in modes}
     weights[CommuteMode.METRO.value] = 3.0
@@ -291,10 +301,23 @@ def _commute_mode_weights(agent: Agent, tick: int) -> dict[str, float]:
     if agent.commute_mode is not None and agent.commute_mode.value in weights:
         habit_years = 0.0
         if agent.commute_since_tick is not None:
-            habit_years = max(tick - agent.commute_since_tick, 0) / TICKS_PER_YEAR
+            habit_years = max(world.tick - agent.commute_since_tick, 0) / TICKS_PER_YEAR
         stickiness = 1.0 + min(habit_years, COMMUTE_HABIT_MAX_YEARS) * COMMUTE_HABIT_STICKINESS_PER_YEAR
         weights[agent.commute_mode.value] *= stickiness
-    return weights
+
+    times = network.agent_trip_minutes(world, agent)
+    if times is None:
+        return weights
+
+    time_w = {m: math.exp(-times[m] / TRIP_TIME_PRIOR_DECAY_MINUTES) for m in weights if m in times}
+    total_existing = sum(weights.values())
+    total_time = sum(time_w.values())
+    if total_existing <= 0 or total_time <= 0:
+        return weights
+    return {
+        m: 0.5 * (weights[m] / total_existing) + 0.5 * (time_w.get(m, 0.0) / total_time)
+        for m in weights
+    }
 
 
 def _shopping_place_weights() -> dict[str, float]:

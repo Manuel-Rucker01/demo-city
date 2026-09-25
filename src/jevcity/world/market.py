@@ -135,7 +135,7 @@ from jevcity.types import (
     TransitLinePolicy,
     World,
 )
-from jevcity.world import commerce, tourism, transport
+from jevcity.world import commerce, network, tourism, transport
 from jevcity.world._helpers import clip, compute_agent_scale, is_working_age, resident_vacancy
 
 RENEWAL_INCREASE_CAP_DEFAULT = 0.10  # fallback when no policy sets max_increase_pct
@@ -257,6 +257,18 @@ def apply_policies(world: World, scenario: Scenario, tick: int) -> None:
                 if state is not None:
                     transport.apply_lez_policy(state, policy, tick)
 
+    # TransitNetworkPolicy: switches World.access's active variant (docs/TRANSIT_ACCESS.md
+    # section 2). Cheap and idempotent even with no such policy (active_variant just returns
+    # "base"), so this always runs -- unlike the per-district loops above it isn't gated by
+    # `world.access is not None`, but it has no observable effect without it (network_variant
+    # is only ever read through world/network.py, all of which is itself a no-op with no
+    # access loaded). `_network_policy` is a private cache (like `_prev_transit_boost` etc.)
+    # so events/triggers.py can read the active policy's label/min_gain_minutes without
+    # threading `scenario` through detect_events.
+    active_policy = network.active_network_policy(scenario, tick)
+    world.network_variant = active_policy.variant if active_policy is not None else "base"
+    world._network_policy = active_policy  # type: ignore[attr-defined]
+
 
 def apply_decisions(
     world: World,
@@ -341,6 +353,8 @@ def apply_decisions(
                         if was_owner:
                             agent.tenure = Tenure.RENTER
                         transport.switch_mode_on_move(agent, tick)
+                        if world.access is not None:
+                            agent.home_zone = network.sample_home_zone(world.access, agent.home, rng)
         elif decision.action == Action.JOB_SEARCH and not agent.employed:
             home_state = world.states.get(agent.home)
             best_state = None
@@ -363,6 +377,8 @@ def apply_decisions(
                     agent.days_unemployed = 0
                     best_state.filled_jobs += 1
                     job_matches += 1
+                    if world.access is not None:
+                        agent.job_zone = network.sample_job_zone(world.access, best_state.id, rng)
 
         # Always: spending_level nudged toward the decision's answer, satisfaction updated.
         agent.spending_level = clip(0.5 * agent.spending_level + 0.5 * decision.spending, 0.0, 1.0)

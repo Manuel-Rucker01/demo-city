@@ -307,3 +307,24 @@ def transit_bucket_text(transit_score: float, transit_boost: float) -> str:
 
 def lez_note_text(car_cost_extra_monthly: float) -> str:
     return f"low-emission zone: +€{round(car_cost_extra_monthly)}/mo by car"
+
+
+# --- zone-level trip times (docs/TRANSIT_ACCESS.md section 2) ------------------------------
+
+WALK_TRIP_MAX_MINUTES = 60  # walk mode dropped from trip_to_work beyond this
+
+
+def trip_times_text(times: dict[str, float], *, has_car: bool) -> str:
+    """Compact door-to-door commute line for the person block's `trip_to_work` field, e.g.
+    "metro 38min, bus 44min, car 25min+parking, bike 24min, walk 70min". `walk` beyond
+    WALK_TRIP_MAX_MINUTES is dropped, `car` is dropped unless has_car. Modes appear in
+    `times`' own (insertion) order, i.e. TransitAccess.modes order."""
+    parts: list[str] = []
+    for mode, minutes in times.items():
+        if mode == "car" and not has_car:
+            continue
+        if mode == "walk" and minutes > WALK_TRIP_MAX_MINUTES:
+            continue
+        suffix = "+parking" if mode == "car" else ""
+        parts.append(f"{mode} {round(minutes)}min{suffix}")
+    return ", ".join(parts)
