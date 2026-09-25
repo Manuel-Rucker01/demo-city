@@ -280,15 +280,15 @@ async function setup(baseRunId: string, compareRunId: string | null): Promise<vo
   slots = newSlots;
 
   // "New metro line" story setup: find the new_transit_line policy on whichever slot has it
-  // (only the scenario run does — base has no policies), then, in record mode, pin a live
-  // metro-share label to each policy district on every map and a fading "line opens" caption on
-  // the scenario map.
+  // (only the scenario run does — base has no policies), then pin a live metro-share label to
+  // each policy district on every map and a fading "line opens" caption on the scenario map
+  // (interactive and record mode alike).
   transitPolicy =
     (slots.flatMap((s) => s.loaded.meta.scenario.policies).find((p) => p.type === "new_transit_line") as
       | TransitLinePolicy
       | undefined) ?? null;
 
-  if (record.enabled && transitPolicy) {
+  if (transitPolicy) {
     const policyDistricts = transitPolicy.districts;
     for (const s of slots) {
       const firstTick = s.loaded.ticks[0];
@@ -375,10 +375,10 @@ function renderCharts(): void {
   }));
   shopsChart.setData(shopsSpecs, policies);
 
-  // Record mode + an actual new_transit_line scenario: swap the city-wide stacked area for a
-  // focused metro-share-over-time line chart of just the policy districts (scenario solid, base
-  // dashed) — the stacked area buries the story under bus/car/bike/walk for the whole city.
-  const showMetroLineChart = record.enabled && !!transitPolicy;
+  // A new_transit_line scenario: swap the city-wide stacked area for a focused
+  // metro-share-over-time line chart of just the policy districts (scenario solid, base dashed)
+  // — the stacked area buries the story under bus/car/bike/walk for the whole city.
+  const showMetroLineChart = !!transitPolicy;
   modeShareChartEl.style.display = showMetroLineChart ? "none" : "";
   metroModeChartEl.style.display = showMetroLineChart ? "" : "none";
   if (showMetroLineChart && transitPolicy) {
@@ -425,13 +425,15 @@ function onPlaybackChange(state: { tickIndex: number; playing: boolean; speed: n
     if (state.tickIndex > 0) {
       const rec = s.loaded.ticks[state.tickIndex - 1];
       if (rec) s.mapView.setDistrictSnapshots(rec.districts);
-      if (s.metroLabels && transitPolicy) {
-        const current: Partial<Record<DistrictId, number>> = {};
-        for (const did of transitPolicy.districts) {
-          current[did] = rec?.districts.find((d) => d.id === did)?.mode_share?.metro;
-        }
-        s.metroLabels.update(current, s.metroBaseline, s.label === "scenario");
+    }
+    if (s.metroLabels && transitPolicy) {
+      // Day 0 (before play) shows day-1 values so the labels are never empty on load.
+      const rec = s.loaded.ticks[Math.max(state.tickIndex - 1, 0)];
+      const current: Partial<Record<DistrictId, number>> = {};
+      for (const did of transitPolicy.districts) {
+        current[did] = rec?.districts.find((d) => d.id === did)?.mode_share?.metro;
       }
+      s.metroLabels.update(current, s.metroBaseline, s.label === "scenario");
     }
   }
   lastTickIndex = state.tickIndex;
