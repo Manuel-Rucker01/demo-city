@@ -1,33 +1,59 @@
 # Jev City
 
-A simulation of Barcelona where every citizen's daily decisions come from **Jev**, TypeSafe AI's
+A simulation of Barcelona where every household's daily decisions come from **Jev**, TypeSafe AI's
 "System One" model: instead of generating text, Jev answers typed questions (choice / score /
-yes-no) with calibrated probabilities. The engine applies those decisions to a simple housing and
-job market and compares policy scenarios, e.g. *what happens if Gràcia caps rents?*
+yes-no) with calibrated probabilities. The engine applies those decisions to a simple housing,
+job, commerce and transport model and compares policy scenarios: *what happens if a new metro line
+opens? if rents are capped?*
 
-> **Status:** MVP. Every run so far used the **mock** provider (weighted random answers, no API
-> calls). One real test call to Jev via Vercel AI Gateway succeeded; no full run has used the real
-> model yet. Nothing here is a forecast. See [Limitations](#limitations).
+> **Status:** working prototype. Full-year runs with real Jev decisions (via OpenRouter and Vercel
+> AI Gateway) are logged and replayable. **Nothing here is a forecast** and behaviour has not been
+> validated against real outcomes. See [Limitations](#limitations).
+
+![New metro line: metro commute share with vs without the line](media/metro_adoption.png)
+
+## First result: a new metro line
+
+Two identical cities (1,000 households, one simulated year, 3 seeds each, real Jev decisions via
+OpenRouter): one unchanged, one where metro access improves in Nou Barris, Sant Andreu and
+Sants-Montjuïc from day 60 (`scenarios/new_metro_line.yaml`).
+
+| District | Metro share at year end, no line | With the line | Effect | Seed-to-seed noise (pooled std) |
+|---|---|---|---|---|
+| Nou Barris | 22.7 % | 49.2 % | +26.5 pts | 3.5 |
+| Sants-Montjuïc | 16.2 % | 39.5 % | +23.3 pts | 2.8 |
+| Sant Andreu | 24.7 % | 45.9 % | +21.2 pts | 5.3 |
+
+Car commuting in Nou Barris falls from 15.9 % to 10.1 %; adoption builds gradually over the months
+after opening (commuters notice the line over ~60 days and weigh their current habit). The line is
+modelled **at district level** (every resident gets the same access boost, no stations), so the
+effect is almost certainly larger than a real line would produce. Reproduce with
+`jevcity batch --scenario scenarios/new_metro_line.yaml --seeds 3` and
+`jevcity compare-batch`.
+
+In a run without any policy, the city-wide commute mix stays within ~4 points of the 2024 EMEF
+mobility survey it was calibrated to over the whole year.
 
 ## What it does
 
-- **World:** 5 Barcelona districts (Ciutat Vella, Eixample, Gràcia, Sant Martí, Nou Barris) with
-  population, age structure, income and shops from Open Data BCN, and plausible values where no
-  open data exists (see [Data](#data)).
-- **Agents:** 1,000 synthetic household heads generated from those distributions (tested up to
-  10,000): age, occupation, wage, employment, job district, rent, savings, spending, satisfaction.
-- **Daily loop (1 tick = 1 day):** only agents with an event that day decide (payday, lease
-  renewal, job loss/offer, rent burden crossing 40 %, life event). About 3.7 % of agents per tick.
-  Each deciding agent gets a compact state (~290 tokens) and four typed questions:
-  - `action`: stay / move / job_search / spend / save (Choice)
-  - `destination`: district if moving (Choice, asked speculatively)
-  - `spending`, `satisfaction` (5-level Scores)
-- **Market:** monthly rent adjustment from vacancy (excess demand), capped at ±0.8 %/month by
-  default; job matching against vacancies; spending feeds shop revenue and job creation.
-- **Scenarios** in YAML (`scenarios/`), e.g. `rent_cap_gracia.yaml` extends `base.yaml` and caps
-  Gràcia's new-lease rent at its initial level from day 30, with renewals frozen.
+- **World:** all 10 Barcelona districts with population, age, household income and size,
+  tenure, rents (INCASÒL deposits), tourist flats, cars, shops and district boundaries from open
+  data, plus plausible values where no district-level data exists (see [Data](#data)).
+- **Agents:** 1,000 synthetic households by default (tested to 10,000): age, occupation, wage,
+  employment, tenure, rent or housing cost, children, car, commute mode and habit, shopping place,
+  savings, satisfaction. Households also arrive in and leave the city.
+- **Daily loop (1 tick = 1 day):** only households with an event that day decide (payday, lease
+  renewal, job loss/offer, rent burden, school year, new transit, shop closures, tourism pressure,
+  arrival). Each gets a compact state (~1,300 tokens incl. questions) and typed questions:
+  action, destination (5 most relevant districts or leaving Barcelona), spending, satisfaction,
+  and conditionally commute mode and shopping place.
+- **Market:** monthly rents from vacancy and tourism pressure, job matching, shops opening and
+  closing with local revenue, commuting costs, low-emission zones, new transit lines, tourist-flat
+  phase-outs, rent caps.
+- **Scenarios** in YAML (`scenarios/`), composable with `extends`.
 - **Replay:** every model call is logged; any run can be replayed without calling Jev again.
-- **Web view:** dark, video-ready map + charts comparing two runs side by side.
+- **Web view:** dark, video-ready map + charts comparing two runs side by side, with a recording
+  mode and a Playwright/ffmpeg recorder (`tools/recorder/`).
 
 ## Quick start
 
@@ -186,9 +212,10 @@ This is a demo and a research sandbox, **not a validated model**. Be careful wit
 - **Not validated against reality.** Neither the market rules nor the agents' behaviour have been
   calibrated or back-tested against observed Barcelona data. The rent cap result shows what *this*
   model does, not what a real cap would do.
-- **Every run so far is mock.** Decisions come from hand-written priors
-  (`src/jevcity/prompts/questions.py`), not from Jev. Mock results say nothing about how Jev would
-  decide.
+- **Mock vs real runs.** Mock runs use hand-written priors (`src/jevcity/prompts/questions.py`)
+  and say nothing about how Jev decides; only runs logged with a real provider (see
+  `usage.models_seen` in each run) reflect Jev. Jev is calibrated for its own training tasks, not
+  for predicting Barcelona households.
 - **Some district inputs are still invented.** Unemployment by district, job locations and
   vacancy are plausible guesses, labelled as such; tenure comes from the 2011 census; the transit
   score is a crude density proxy (it ranks Gràcia below Nou Barris because Gràcia's area

@@ -15,3 +15,7 @@ web/public/runs/
 tools/recorder/node_modules/
 media/*.webm
 media/frames/
+media/*.mp4
+/node_modules/
+/package.json
+/package-lock.json
