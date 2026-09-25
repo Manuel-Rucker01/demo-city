@@ -120,12 +120,57 @@ class DistrictState(BaseModel):
         return max(self.jobs - self.filled_jobs, 0)
 
 
+# --- Transit network: zones (barris) and door-to-door travel times --------------------------
+# Built offline by scripts/build_transit_access.py into data/processed/transit_access.json.
+# Contract: docs/TRANSIT_ACCESS.md.
+
+ZoneId = str  # Open Data BCN barri code, zero-padded: "01".."73"
+
+
+class Zone(BaseModel):
+    id: ZoneId
+    name: str  # barri name with accents, e.g. "el Putxet i el Farró"
+    district: DistrictId
+    population: int  # residents (padró)
+    job_weight: float  # share of its district's jobs located in this zone; sums to 1 within a district
+    centroid: tuple[float, float]  # population-weighted (lon, lat)
+    rail_coverage: float  # share of residents within TransitAccess.radius_m of an existing rail station
+    new_coverage: dict[str, float] = Field(default_factory=dict)
+    # variant -> share of residents within radius_m of a station new in that variant AND not within
+    # radius_m of any existing station (the people for whom the line is genuinely new access)
+
+
+class Station(BaseModel):
+    name: str
+    lines: list[str]  # e.g. ["L9", "L10"], ["S1", "S2"]
+    lon: float
+    lat: float
+    variant: str = "base"  # "base" = exists today; otherwise the variant that adds it
+    approx: bool = False  # True when coordinates are approximate (no official source found)
+
+
+class TransitAccess(BaseModel):
+    version: int = 1
+    radius_m: int = 600  # walking catchment used for coverage
+    zones: list[Zone]  # matrix order: times[...][i * len(zones) + j] is zones[i] -> zones[j]
+    variants: list[str]  # always starts with "base"; e.g. ["base", "l9_central"]
+    modes: list[str]  # CommuteMode values, e.g. ["metro", "bus", "car", "bike", "walk"]
+    times: dict[str, dict[str, list[float]]]  # variant -> mode -> row-major door-to-door minutes
+    #   (every variant lists every mode; car/bike/walk/bus are normally identical across variants;
+    #    "metro" = any rail: metro, tram, FGC, Rodalies, including walking, waiting and transfers)
+    stations: list[Station]
+    sources: dict[str, str]  # item -> dataset id / URL / note (provenance of every input)
+    assumptions: dict[str, float | str]  # speeds, penalties, detour factor... (documented model)
+
+
 @dataclass
 class World:
     profiles: dict[DistrictId, DistrictProfile]
     states: dict[DistrictId, DistrictState]
     tick: int = 0
     rent_history: dict[DistrictId, list[float]] | None = None  # avg_rent at each month boundary
+    access: TransitAccess | None = None  # zones + door-to-door times (Scenario.access_path); None = district-only model
+    network_variant: str = "base"  # TransitAccess variant in effect this tick (set by apply_policies)
 
 
 # --- Agents --------------------------------------------------------------------------------
@@ -188,6 +233,8 @@ class Agent:
     commute_since_tick: int | None = None  # when the current commute mode started (habit);
     #                                        negative = before the simulation started
     arrived_tick: int | None = None  # set for households that moved into the city mid-run
+    home_zone: ZoneId | None = None  # barri inside `home` (only when World.access is set)
+    job_zone: ZoneId | None = None  # barri inside `job_district` (only when employed and World.access is set)
 
     @property
     def income_monthly(self) -> float:
@@ -471,8 +518,21 @@ class LowEmissionZonePolicy(BaseModel):
     car_cost_monthly: float = 60.0
 
 
+class TransitNetworkPolicy(BaseModel):
+    """Switch door-to-door travel times to a TransitAccess variant (e.g. a real new line with its
+    real stations) from start_tick. Needs Scenario.access_path. Only people whose rail trip to work
+    gets at least `min_gain_minutes` shorter, or who get new walking-distance access at home, are
+    told about it (spread over EventParams.transit_awareness_days)."""
+
+    type: Literal["transit_network"] = "transit_network"
+    variant: str  # a TransitAccess.variants entry other than "base"
+    label: str = "new metro line"  # how agents are told about it, e.g. "L9"
+    start_tick: int = 0
+    min_gain_minutes: float = 3.0
+
+
 Policy = Annotated[
-    RentCapPolicy | TouristFlatPolicy | TransitLinePolicy | LowEmissionZonePolicy,
+    RentCapPolicy | TouristFlatPolicy | TransitLinePolicy | LowEmissionZonePolicy | TransitNetworkPolicy,
     Field(discriminator="type"),
 ]
 
@@ -525,6 +585,7 @@ class Scenario(BaseModel):
     ticks: int = 365
     n_agents: int = 1000
     data_path: str = "data/processed/districts.json"
+    access_path: str | None = None  # data/processed/transit_access.json -> zone-level commutes; None = district-only
     districts: list[DistrictId] | None = None  # None = every district in the data file
     jev: JevConfig = Field(default_factory=JevConfig)
     market: MarketParams = Field(default_factory=MarketParams)
