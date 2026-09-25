@@ -1,0 +1,18 @@
+[
+  {
+    "run_id": "base-or3-s1",
+    "scenario": "base",
+    "description": "Baseline Barcelona (every district in data/processed/districts.json, no districts filter), no policy intervention.",
+    "ticks": 365,
+    "n_agents": 1000,
+    "provider": "openrouter"
+  },
+  {
+    "run_id": "metro-or3-s1",
+    "scenario": "new_metro_line",
+    "description": "A plausible L9/L10-style metro extension reaching Sant Andreu, Nou Barris and Sants-Montju\u00efc from tick 60: transit_boost +0.2 in those three districts. Districts and boost size are a plausible illustration, not a real Barcelona TMB project plan.",
+    "ticks": 365,
+    "n_agents": 1000,
+    "provider": "openrouter"
+  }
+]

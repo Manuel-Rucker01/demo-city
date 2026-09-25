@@ -6,6 +6,7 @@ import math
 import time
 
 import numpy as np
+from _perf import PERF_SLACK
 
 from jevcity.population.generator import (
     ARRIVAL_MAX_AGE,
@@ -222,7 +223,7 @@ def test_performance_10000_agents_under_1s(profiles):
     agents = generate_population(profiles, N_LARGE, rng)
     elapsed = time.perf_counter() - start
     assert len(agents) == N_LARGE
-    assert elapsed < 1.0
+    assert elapsed < 1.0 * PERF_SLACK
 
 
 def test_all_floats_finite_and_in_range(profiles, rng):
@@ -461,4 +462,4 @@ def test_spawn_arrivals_performance(profiles):
     arrivals = spawn_arrivals(profiles, world, 500, rng, start_id=N_LARGE, tick=1)
     elapsed = time.perf_counter() - start
     assert len(arrivals) == 500
-    assert elapsed < 1.0
+    assert elapsed < 1.0 * PERF_SLACK

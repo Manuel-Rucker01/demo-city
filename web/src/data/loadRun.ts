@@ -4,7 +4,8 @@ import { streamNdjson } from "./ndjson";
 import { buildCombinedAgents, reconstructRun, type ReconstructedRun } from "./reconstruct";
 import type { AgentSnapshot, RunIndex, RunMeta, RunSummary, TickRecord } from "./types";
 
-const RUNS_BASE = "/runs";
+// BASE_URL is "/" in dev and "/demo-city/" on GitHub Pages (vite `base`).
+const RUNS_BASE = `${import.meta.env.BASE_URL}runs`;
 
 export async function fetchRunIndex(): Promise<RunIndex> {
   const res = await fetch(`${RUNS_BASE}/index.json`);

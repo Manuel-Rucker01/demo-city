@@ -15,6 +15,16 @@
       href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Inter+Tight:wght@500;600;700&display=swap"
       rel="stylesheet"
     />
+    <script>
+      // Bare URL (e.g. the public demo): jump to the story configured in runs/defaults.json,
+      // if the deployment ships one. Relative path so it works under any base path.
+      if (!location.search) {
+        fetch("runs/defaults.json")
+          .then((r) => (r.ok ? r.text() : ""))
+          .then((q) => { if (q.trim()) location.replace("?" + q.trim()); })
+          .catch(() => {});
+      }
+    </script>
   </head>
   <body>
     <div id="app"></div>

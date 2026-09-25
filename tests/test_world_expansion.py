@@ -8,6 +8,7 @@ import time
 
 import numpy as np
 import pytest
+from _perf import PERF_SLACK
 
 from jevcity.types import (
     LEAVE_CITY,
@@ -632,4 +633,4 @@ def test_performance_daily_update_ex_10000_agents(profiles):
     start = time.perf_counter()
     daily_update_ex(world, agents_dict, scenario, 1, rng)
     elapsed = time.perf_counter() - start
-    assert elapsed < 0.05
+    assert elapsed < 0.05 * PERF_SLACK

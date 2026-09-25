@@ -1,0 +1,53 @@
+name: Deploy demo to GitHub Pages
+
+# Publishes the static web replay with the curated runs in web/demo-runs/
+# (no API keys or model calls involved: the demo only replays logged runs).
+on:
+  push:
+    branches: [mvp]
+    paths: ["web/**", ".github/workflows/pages.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Stage demo runs and district shapes
+        run: |
+          rm -rf public/runs && cp -r demo-runs public/runs
+          mkdir -p public/data && cp ../data/processed/districts.geojson public/data/
+      - run: npm run build
+        env:
+          VITE_BASE: /demo-city/
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: web/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

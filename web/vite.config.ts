@@ -48,6 +48,8 @@ function copyMaplibreWorkerPlugin(): Plugin {
 }
 
 export default defineConfig({
+  // Deployed under a sub-path on GitHub Pages (VITE_BASE=/demo-city/); "/" everywhere else.
+  base: process.env.VITE_BASE ?? "/",
   plugins: [copyMaplibreWorkerPlugin()],
   optimizeDeps: {
     exclude: ["maplibre-gl"],

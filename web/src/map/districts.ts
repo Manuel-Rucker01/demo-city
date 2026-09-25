@@ -16,7 +16,7 @@ export interface DistrictsGeo {
 }
 
 export async function loadDistrictsGeo(): Promise<DistrictsGeo> {
-  const res = await fetch("/data/districts.geojson");
+  const res = await fetch(`${import.meta.env.BASE_URL}data/districts.geojson`);
   if (!res.ok) throw new Error(`Failed to load districts.geojson: ${res.status}`);
   const fc = (await res.json()) as GeoJSON.FeatureCollection;
   const byId = new Map<DistrictId, DistrictFeature>();

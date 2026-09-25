@@ -28,7 +28,7 @@ import {
 // start and build, so this fixed path is valid in dev, build, and preview alike. Must run before
 // any `new maplibregl.Map(...)` — module load order guarantees that here, since this file is
 // always imported before a MapView is constructed.
-maplibregl.setWorkerUrl("/vendor/maplibre-gl/maplibre-gl-worker.mjs");
+maplibregl.setWorkerUrl(`${import.meta.env.BASE_URL}vendor/maplibre-gl/maplibre-gl-worker.mjs`);
 
 export type ColorMode = "district" | "employed" | "satisfaction" | "commute" | "metro";
 export type FillMetric =

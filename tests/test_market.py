@@ -8,6 +8,7 @@ from collections import defaultdict
 
 import numpy as np
 import pytest
+from _perf import PERF_SLACK
 
 from jevcity.population.generator import generate_population
 from jevcity.types import (
@@ -459,7 +460,7 @@ def test_performance_daily_update_10000_agents(profiles):
     start = time.perf_counter()
     daily_update(world, agents_dict, scenario, 1, rng)
     elapsed = time.perf_counter() - start
-    assert elapsed < 0.05
+    assert elapsed < 0.05 * PERF_SLACK
 
 
 # --- satisfaction: inertia + flat no-shock drift (realism fix) --------------------------
