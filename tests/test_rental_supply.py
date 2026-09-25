@@ -583,6 +583,7 @@ def test_construction_accumulates_fractional_starts_in_small_districts(profiles)
     world = init_world(profiles, agents)
     scenario = make_scenario()
     scenario.rental_supply.construction_lag_ticks = 30
+    scenario.rental_supply.construction_monthly_share = 0.005  # ~0.1 unit/district/month here
     before = sum(s.housing_units for s in world.states.values())
     monthly = sum(
         scenario.rental_supply.construction_monthly_share * s.housing_units
