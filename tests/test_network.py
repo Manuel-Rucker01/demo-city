@@ -803,3 +803,13 @@ def test_scenario_with_missing_access_data_file_skips_gracefully(tmp_path):
     )
     with pytest.raises(ValueError):
         asyncio.run(run_simulation(scenario, tmp_path / "run"))
+
+
+def test_lez_transit_change_is_described_as_lez_not_metro():
+    # triggers.py emits payload kind "low_emission_zone"; it used to fall through to the
+    # "new metro line" sentence.
+    from jevcity.prompts.state_builder import _event_sentence
+    from jevcity.types import Event, EventKind
+
+    ev = Event(agent_id=1, kind=EventKind.TRANSIT_CHANGE, payload={"kind": "low_emission_zone"})
+    assert "low-emission zone" in _event_sentence(ev, None)  # world unused for this kind

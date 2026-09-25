@@ -205,7 +205,7 @@ def _event_sentence(event: Event, world: World) -> str:
         if kind == "network_access":
             line = str(p.get("line", "new metro line"))
             return f"A new {line} station opened within walking distance of your home."
-        if kind == "lez":
+        if kind in ("low_emission_zone", "lez"):  # triggers.py emits "low_emission_zone"
             return "A low-emission zone now applies near you."
         return "A new metro line opened near you."
     if event.kind is EventKind.SHOP_CLOSED:
