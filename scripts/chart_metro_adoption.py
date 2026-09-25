@@ -25,7 +25,8 @@ START = date(2026, 1, 1)
 
 
 def series(batch: str, district: str) -> list[dict]:
-    s = json.load(open(f"runs/{batch}/batch_summary.json"))["series"]
+    with open(f"runs/{batch}/batch_summary.json") as fh:
+        s = json.load(fh)["series"]
     return s[district]["mode_share.metro"]
 
 
