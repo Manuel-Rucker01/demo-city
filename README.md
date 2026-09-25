@@ -1,5 +1,9 @@
 # Jev City
 
+[![CI](https://github.com/Manuel-Rucker01/demo-city/actions/workflows/ci.yml/badge.svg)](https://github.com/Manuel-Rucker01/demo-city/actions/workflows/ci.yml)
+**Live demo:** https://manuel-rucker01.github.io/demo-city/ (replays logged real runs; no model
+calls in the browser)
+
 A simulation of Barcelona where every household's daily decisions come from **Jev**, TypeSafe AI's
 "System One" model: instead of generating text, Jev answers typed questions (choice / score /
 yes-no) with calibrated probabilities. The engine applies those decisions to a simple housing,
