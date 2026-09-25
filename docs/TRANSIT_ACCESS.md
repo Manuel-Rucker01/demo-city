@@ -54,11 +54,20 @@ It is one `TransitAccess` JSON document.
 
 | Mode | Model |
 |---|---|
-| walk | crow-fly × 1.3 detour / 4.8 km/h |
-| bike | crow-fly × 1.3 / 14 km/h + 2 min (unlock/park) |
+| walk | crow-fly × 1.3 detour / 4.8 km/h + net ascent / 10 m per minute (Naismith-style; descents get no bonus) |
+| bike | crow-fly × 1.3 / 13 km/h + net ascent / 6 m per minute (casual rider, ~360 vertical m/hour; descents get no bonus) + 5 min (unlock/lock, dock or parking, both ends) |
 | car | crow-fly × 1.3 / 20 km/h + 8 min (parking + walk) |
 | bus | 3 min access + 5 min wait + crow-fly × 1.3 / 11 km/h + 3 min egress (no route data; stated as such) |
-| metro (rail) | walk to any of the 5 nearest stations (≤1.5 km) + wait (half headway) + in-vehicle + transfers + walk from the station to the destination. Best over station choices; shortest path on the line graph. |
+| metro (rail) | walk to any of the 5 nearest stations (≤1.5 km) + wait (half headway) + in-vehicle + transfers + walk from the station to the destination. Best over station choices; shortest path on the line graph. The access/egress walking legs carry the same net-ascent penalty as a standalone walk trip (origin → boarding station, alighting station → destination). |
+
+Barcelona rises steeply from the sea toward Collserola (Sarrià-Sant Gervasi, Horta-Guinardó, Nou
+Barris, upper Gràcia); a flat crow-fly model made bike the fastest mode for the large majority of
+commutes, which does not match its real ~3% mode share (EMEF 2024). Elevation (ground level, m) is
+looked up per point -- every census-section population point, every zone centroid, and every
+station -- from a public DEM (default: OpenTopoData `eudem25m`), cached in
+`data/raw/transit/elevations_eudem25m.json` and recorded in `sources`/`SOURCES.md`. Net ascent =
+max(0, elevation[destination] − elevation[origin]) in the direction of travel; descents never get a
+time bonus.
 
 Rail parameters:
 

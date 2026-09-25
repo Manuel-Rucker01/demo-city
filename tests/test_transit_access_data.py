@@ -141,6 +141,50 @@ def test_stations_have_lines_and_coordinates(access: TransitAccess):
         assert st.variant in access.variants
 
 
+def test_bike_uphill_slower_than_downhill(access: TransitAccess, name_index):
+    """Barcelona rises steeply from the sea (la Barceloneta) toward Collserola (Sant Gervasi - la
+    Bonanova, higher up the hill): the elevation-aware bike model must make the uphill trip
+    noticeably slower than the reverse (downhill) trip, unlike the old flat crow-fly model where
+    both directions were identical."""
+    n = len(access.zones)
+    low = name_index["la Barceloneta"]
+    high = name_index["Sant Gervasi - la Bonanova"]
+    bike = access.times["base"]["bike"]
+    uphill = bike[low * n + high]
+    downhill = bike[high * n + low]
+    assert uphill > downhill, f"uphill bike ({uphill}) should exceed downhill bike ({downhill})"
+
+
+def test_bike_uphill_to_vallvidrera_slower_than_downhill(access: TransitAccess, name_index):
+    n = len(access.zones)
+    low = name_index["la Barceloneta"]
+    high = name_index["Vallvidrera, el Tibidabo i les Planes"]
+    bike = access.times["base"]["bike"]
+    uphill = bike[low * n + high]
+    downhill = bike[high * n + low]
+    assert uphill > downhill, f"uphill bike ({uphill}) should exceed downhill bike ({downhill})"
+
+
+def test_walk_uphill_slower_than_downhill(access: TransitAccess, name_index):
+    n = len(access.zones)
+    low = name_index["la Barceloneta"]
+    high = name_index["Sant Gervasi - la Bonanova"]
+    walk = access.times["base"]["walk"]
+    uphill = walk[low * n + high]
+    downhill = walk[high * n + low]
+    assert uphill > downhill, f"uphill walk ({uphill}) should exceed downhill walk ({downhill})"
+
+
+def test_walk_uphill_to_vallvidrera_slower_than_downhill(access: TransitAccess, name_index):
+    n = len(access.zones)
+    low = name_index["la Barceloneta"]
+    high = name_index["Vallvidrera, el Tibidabo i les Planes"]
+    walk = access.times["base"]["walk"]
+    uphill = walk[low * n + high]
+    downhill = walk[high * n + low]
+    assert uphill > downhill, f"uphill walk ({uphill}) should exceed downhill walk ({downhill})"
+
+
 def test_new_l9_stations_present(access: TransitAccess):
     # Names are matched by prefix: "El Putxet" is disambiguated to "El Putxet (L9)" because an
     # existing (different) FGC station already has that exact name -- see build_l9_central.

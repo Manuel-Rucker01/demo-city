@@ -28,6 +28,8 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import httpx
+
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
@@ -49,13 +51,25 @@ CODI_TO_DISTRICT = {f"{i:02d}": BCN_DISTRICTS[i - 1] for i in range(1, 11)}
 ACCESS_DATE = "2026-09-25"
 
 # --- Travel-time model constants (docs/TRANSIT_ACCESS.md "Travel-time model") ------------------
-
+#
+# Bike and walk times are elevation-aware (added to make bike stop dominating every commute --
+# Barcelona's real bike mode share is ~3% per EMEF 2024, but crow-fly-only bike times made it the
+# fastest mode in ~83% of OD pairs, since the flat model ignored the climb from the sea up to
+# Collserola). Both legs use net ascent only: max(0, elevation[destination] - elevation[origin]),
+# in the direction of travel -- descents get no time bonus (real cyclists/walkers do not save time
+# going downhill the way they lose it going uphill; braking/care on descents roughly cancels the
+# saved effort). Elevation is looked up per point (census-section population point, zone centroid,
+# station) from data/raw/transit/elevations_eudem25m.json -- see `fetch_elevations()` and
+# `sources["elevation"]`.
 ASSUMPTIONS: dict[str, float | str] = {
     "walk_detour_factor": 1.3,
     "walk_speed_kmh": 4.8,
+    "walk_climb_m_per_min": 10.0,  # Naismith-style: +1 min per 10m of net ascent
     "bike_detour_factor": 1.3,
-    "bike_speed_kmh": 14.0,
-    "bike_fixed_min": 2.0,
+    "bike_speed_kmh": 13.0,  # urban average with traffic lights (lowered from 14; the extra 5min
+    # fixed time now also covers Bicing dock/parking at both ends, not just unlock/lock)
+    "bike_fixed_min": 5.0,  # unlock/lock + dock or parking, both ends
+    "bike_climb_m_per_min": 6.0,  # casual rider climbing ~360 vertical m/hour
     "car_detour_factor": 1.3,
     "car_speed_kmh": 20.0,
     "car_fixed_min": 8.0,
@@ -126,6 +140,103 @@ def haversine_m(lon1: float, lat1: float, lon2: float, lat2: float) -> float:
     dlmb = math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
+
+
+# =================================================================================================
+# 0. Elevation (OpenTopoData EU-DEM 25m; cached in data/raw/transit/, never invented)
+# =================================================================================================
+
+ELEVATION_SOURCE = "OpenTopoData eudem25m (Copernicus EU-DEM v1.1, ~25m resolution)"
+ELEVATION_URL = "https://api.opentopodata.org/v1/eudem25m"
+# eudem25m returns null for a handful of points right on Barcelona's coastline/port breakwaters
+# (masked as sea in that dataset). aster30m (NASA/METI ASTER GDEM, ~30m) has real land/harbour
+# coverage there and returns 0m, which is plausible for sea-level port/beach points; used only as
+# a fallback for points eudem25m can't answer, never as the primary source.
+ELEVATION_FALLBACK_URL = "https://api.opentopodata.org/v1/aster30m"
+ELEVATION_FALLBACK_SOURCE = "OpenTopoData aster30m (NASA/METI ASTER GDEM, ~30m resolution)"
+ELEV_CACHE_PATH_NAME = "elevations_eudem25m.json"
+ELEV_UA = "jevcity-research/1.0 (contact: claudecodemail2026@gmail.com)"
+
+
+def elev_key(lon: float, lat: float) -> str:
+    """Cache key at 5-decimal precision (~1.1m), matching the rounding already used for station
+    and zone-centroid coordinates elsewhere in this file."""
+    return f"{round(lat, 5)},{round(lon, 5)}"
+
+
+def fetch_elevations(
+    points: list[tuple[float, float]], no_fetch: bool = False
+) -> dict[str, float]:
+    """points: list of (lon, lat). Returns {elev_key(lon,lat): elevation_m} for every requested
+    point, backed by a persistent cache at data/raw/transit/elevations_eudem25m.json so re-running
+    the build doesn't re-fetch. Missing points are fetched from OpenTopoData in batches of <=100
+    (its documented per-request max), 1 request/second (its documented rate limit). Never
+    fabricates a value: if points are missing from the cache and `no_fetch` is set, raises."""
+    cache_path = RAW / ELEV_CACHE_PATH_NAME
+    cache: dict[str, float] = {}
+    if cache_path.exists():
+        cache = json.loads(cache_path.read_text())
+
+    wanted = {elev_key(lon, lat): (lon, lat) for lon, lat in points}
+    missing = {k: v for k, v in wanted.items() if k not in cache}
+    if missing:
+        if no_fetch:
+            raise RuntimeError(
+                f"{len(missing)} elevation points are missing from {cache_path} and --no-fetch "
+                "was passed; run without --no-fetch at least once to populate the cache."
+            )
+        print(f"[build] fetching {len(missing)} elevations from OpenTopoData ({ELEVATION_SOURCE})...")
+        items = list(missing.items())
+        nulls: list[tuple[str, tuple[float, float]]] = []
+        with httpx.Client(timeout=30.0, headers={"User-Agent": ELEV_UA}) as client:
+            for i in range(0, len(items), 100):
+                batch = items[i : i + 100]
+                locs = "|".join(f"{lat},{lon}" for _, (lon, lat) in batch)
+                resp = client.get(ELEVATION_URL, params={"locations": locs})
+                resp.raise_for_status()
+                data = resp.json()
+                results = data["results"]
+                assert len(results) == len(batch), "OpenTopoData result count mismatch"
+                for (key, latlon), r in zip(batch, results):
+                    elev = r["elevation"]
+                    if elev is None:
+                        nulls.append((key, latlon))  # resolved via the fallback dataset below
+                    else:
+                        cache[key] = float(elev)
+                if i + 100 < len(items):
+                    time.sleep(1.0)  # OpenTopoData public instance: 1 request/second
+
+            if nulls:
+                # eudem25m masks a handful of Barcelona coastline/port points as sea (no elevation
+                # value); resolved with aster30m instead, never invented -- see ELEVATION_FALLBACK_*.
+                print(
+                    f"[build] {len(nulls)} points had no eudem25m elevation (coastline/port, masked "
+                    f"as sea); falling back to {ELEVATION_FALLBACK_SOURCE}..."
+                )
+                time.sleep(1.0)
+                for i in range(0, len(nulls), 100):
+                    batch = nulls[i : i + 100]
+                    locs = "|".join(f"{lat},{lon}" for _, (lon, lat) in batch)
+                    resp = client.get(ELEVATION_FALLBACK_URL, params={"locations": locs})
+                    resp.raise_for_status()
+                    data = resp.json()
+                    results = data["results"]
+                    assert len(results) == len(batch), "OpenTopoData result count mismatch"
+                    for (key, _), r in zip(batch, results):
+                        elev = r["elevation"]
+                        if elev is None:
+                            raise RuntimeError(
+                                f"OpenTopoData returned null elevation for {key} on both "
+                                f"{ELEVATION_SOURCE} and the {ELEVATION_FALLBACK_SOURCE} fallback"
+                            )
+                        cache[key] = float(elev)
+                    if i + 100 < len(nulls):
+                        time.sleep(1.0)
+
+        cache_path.write_text(json.dumps(cache, sort_keys=True))
+        print(f"[build] cached {len(cache)} elevations -> {cache_path}")
+
+    return {k: cache[k] for k in wanted}
 
 
 # =================================================================================================
@@ -644,13 +755,20 @@ def dijkstra_from_entries(
 # =================================================================================================
 
 
-def walk_min(dist_m: float) -> float:
-    return dist_m / 1000.0 * ASSUMPTIONS["walk_detour_factor"] / ASSUMPTIONS["walk_speed_kmh"] * 60.0
+def walk_min(dist_m: float, elev_gain_m: float = 0.0) -> float:
+    """elev_gain_m: net ascent from origin to destination (already clamped to >=0 by the caller,
+    but clamped again here defensively -- descents never get a time bonus)."""
+    return (
+        dist_m / 1000.0 * ASSUMPTIONS["walk_detour_factor"] / ASSUMPTIONS["walk_speed_kmh"] * 60.0
+        + max(0.0, elev_gain_m) / ASSUMPTIONS["walk_climb_m_per_min"]
+    )
 
 
-def bike_min(dist_m: float) -> float:
+def bike_min(dist_m: float, elev_gain_m: float = 0.0) -> float:
+    """elev_gain_m: net ascent from origin to destination; see walk_min."""
     return (
         dist_m / 1000.0 * ASSUMPTIONS["bike_detour_factor"] / ASSUMPTIONS["bike_speed_kmh"] * 60.0
+        + max(0.0, elev_gain_m) / ASSUMPTIONS["bike_climb_m_per_min"]
         + ASSUMPTIONS["bike_fixed_min"]
     )
 
@@ -687,9 +805,16 @@ def rail_time_from_point(
     dest_lat: float,
     station_pts: list[tuple[str, float, float]],
     station_times: dict[str, dict[str, float]],
+    origin_elev: float,
+    dest_elev: float,
+    station_elev: dict[str, float],
     origin_near: list[tuple[str, float]] | None = None,
     dest_near: list[tuple[str, float]] | None = None,
 ) -> float | None:
+    """The walking legs at both ends of the rail trip (origin -> boarding station, alighting
+    station -> destination) carry the same ascent penalty as a standalone walk trip
+    (docs/TRANSIT_ACCESS.md: 'Also apply the ascent penalty to the walking legs to/from rail
+    stations inside the metro time')."""
     o_near = origin_near if origin_near is not None else nearest_stations(
         lon, lat, station_pts, ASSUMPTIONS["rail_access_max_stations"], ASSUMPTIONS["rail_access_radius_m"]
     )
@@ -700,13 +825,13 @@ def rail_time_from_point(
         return None
     best = math.inf
     for o_name, o_dist in o_near:
-        access = walk_min(o_dist)
+        access = walk_min(o_dist, station_elev.get(o_name, origin_elev) - origin_elev)
         times_from_o = station_times.get(o_name, {})
         for d_name, d_dist in d_near:
             t = times_from_o.get(d_name)
             if t is None:
                 continue
-            egress = walk_min(d_dist)
+            egress = walk_min(d_dist, dest_elev - station_elev.get(d_name, dest_elev))
             total = access + t + egress
             best = min(best, total)
     return None if math.isinf(best) else best
@@ -724,6 +849,16 @@ def main() -> int:
     args = parser.parse_args()
 
     t0 = time.time()
+
+    # snapshot the currently-committed output (if any) before it gets overwritten, purely so the
+    # sanity report can show a before/after comparison of this change (elevation-aware bike/walk).
+    before_access: TransitAccess | None = None
+    before_path = PROCESSED / "transit_access.json"
+    if before_path.exists():
+        try:
+            before_access = TransitAccess.model_validate_json(before_path.read_text())
+        except (OSError, ValueError):
+            before_access = None
 
     if not args.no_fetch:
         from fetch_transit_raw import fetch_raw
@@ -779,6 +914,41 @@ def main() -> int:
     l9_lines = build_l9_central(reg, base_lines)
     print(f"[build] {len(reg.stations)} merged stations, {len(base_lines)} base lines, "
           f"{len(l9_lines)} l9_central lines")
+
+    print("[build] fetching/loading elevations for census points, zone centroids and stations...")
+    elev_points: list[tuple[float, float]] = []
+    elev_points += [(s["lon"], s["lat"]) for s in sections]
+    elev_points += [z["centroid"] for z in zones_meta]
+    elev_points += [(st["lon"], st["lat"]) for st in reg.stations.values()]
+    elev_cache = fetch_elevations(elev_points, no_fetch=args.no_fetch)
+    for s in sections:
+        s["elev"] = elev_cache[elev_key(s["lon"], s["lat"])]
+    for z in zones_meta:
+        z["elev"] = elev_cache[elev_key(*z["centroid"])]
+    for st in reg.stations.values():
+        st["elev"] = elev_cache[elev_key(st["lon"], st["lat"])]
+    station_elev: dict[str, float] = {name: st["elev"] for name, st in reg.stations.items()}
+    print(
+        f"[build] elevation range: sections {min(s['elev'] for s in sections):.0f}-"
+        f"{max(s['elev'] for s in sections):.0f}m, zone centroids "
+        f"{min(z['elev'] for z in zones_meta):.0f}-{max(z['elev'] for z in zones_meta):.0f}m"
+    )
+
+    # top-10 largest uphill bike climb penalties, zone-centroid to zone-centroid (report only; the
+    # actual matrix uses section-level points, this is a simple, reportable per-zone-pair proxy).
+    bike_climb_penalties = []
+    for zi in zones_meta:
+        for zj in zones_meta:
+            if zi["id"] == zj["id"]:
+                continue
+            gain = zj["elev"] - zi["elev"]
+            if gain <= 0:
+                continue
+            bike_climb_penalties.append(
+                (gain / ASSUMPTIONS["bike_climb_m_per_min"], zi["name"], zj["name"], zi["elev"], zj["elev"])
+            )
+    bike_climb_penalties.sort(reverse=True)
+    bike_climb_penalties = bike_climb_penalties[:10]
 
     variants = {"base": base_lines, "l9_central": l9_lines}
 
@@ -865,12 +1035,15 @@ def main() -> int:
                     if p == 0 and total_pop_i != 1:
                         continue
                     d = haversine_m(s["lon"], s["lat"], clon, clat)
-                    w_sum["walk"] += p * walk_min(d)
-                    w_sum["bike"] += p * bike_min(d)
+                    elev_gain = zj_meta["elev"] - s["elev"]  # net ascent, may be negative (descent)
+                    w_sum["walk"] += p * walk_min(d, elev_gain)
+                    w_sum["bike"] += p * bike_min(d, elev_gain)
                     w_sum["car"] += p * car_min(d)
                     w_sum["bus"] += p * bus_min(d)
                     rt = rail_time_from_point(
-                        s["lon"], s["lat"], clon, clat, pts, st_times, origin_near=o_near, dest_near=d_near
+                        s["lon"], s["lat"], clon, clat, pts, st_times,
+                        s["elev"], zj_meta["elev"], station_elev,
+                        origin_near=o_near, dest_near=d_near,
                     )
                     if rt is None:
                         rt = car_min(d) + 15.0  # no rail access at all: fall back, penalised
@@ -1009,6 +1182,19 @@ def main() -> int:
         "every constant is in `assumptions`.",
         "coverage_radius": "docs/TRANSIT_ACCESS.md: 600m crow-fly on census-section population "
         "points (this build).",
+        "elevation": f"{ELEVATION_SOURCE} via {ELEVATION_URL} (max 100 points/request, 1 "
+        f"request/second), accessed {ACCESS_DATE}. Ground elevation (m) looked up directly for "
+        "every point used by the build: all 1068 census-section population points (bike/walk trip "
+        "origins), all 73 zone centroids (bike/walk trip destinations), and all "
+        f"{len(reg.stations)} merged rail stations (both existing and new L9/L10-central), so the "
+        "metro mode's walking access/egress legs are also elevation-aware. Cached in "
+        f"data/raw/transit/{ELEV_CACHE_PATH_NAME} (gitignored, keyed by 5-decimal lat,lon), never "
+        "invented; re-running the build without --no-fetch fetches only points missing from the "
+        f"cache. A handful of coastline/port points come back null from eudem25m (masked as sea); "
+        f"those fall back to {ELEVATION_FALLBACK_SOURCE} instead, same caching/never-invented rule. "
+        "Used for the bike/walk climb penalty -- see `assumptions` "
+        "(walk_climb_m_per_min, bike_climb_m_per_min) and the build docstring at the top of this "
+        "file.",
     }
 
     access = TransitAccess(
@@ -1031,7 +1217,7 @@ def main() -> int:
     print(f"[build] wrote {out_path} ({out_path.stat().st_size:,} bytes)")
 
     elapsed = time.time() - t0
-    write_sanity_report(access, elapsed)
+    write_sanity_report(access, elapsed, before_access=before_access, bike_climb_penalties=bike_climb_penalties)
     write_map(access)
     append_sources_md()
 
@@ -1044,7 +1230,56 @@ def main() -> int:
 # =================================================================================================
 
 
-def write_sanity_report(access: TransitAccess, elapsed: float) -> None:
+def dest_weight_by_zone_id(
+    zones: list[Zone], districts_json: list[dict] | None
+) -> tuple[dict[str, float], bool]:
+    """destination weight for the fastest-mode-share report: destination job_weight, scaled by its
+    district's share of citywide jobs when a jobs source is available (districts.json's
+    jobs_per_resident x population, per-district), otherwise just job_weight on its own (per the
+    task: 'population x destination job_weight x destination district's jobs share if available,
+    otherwise population x job_weight' -- the population factor is applied separately, per OD
+    pair, by the caller). Returns (weights, used_district_jobs_share)."""
+    if districts_json:
+        district_jobs = {
+            d["id"]: d.get("jobs_per_resident", 0.0) * d.get("population", 0.0) for d in districts_json
+        }
+        total_jobs = sum(district_jobs.values())
+        if total_jobs > 0:
+            jobs_share = {d: j / total_jobs for d, j in district_jobs.items()}
+            return {z.id: z.job_weight * jobs_share.get(z.district, 0.0) for z in zones}, True
+    return {z.id: z.job_weight for z in zones}, False
+
+
+def fastest_mode_shares(ta: TransitAccess, weight_by_zone_id: dict[str, float], variant: str) -> dict[str, float]:
+    """Share of OD pairs (i != j), weighted by origin population x dest_weight_by_zone_id[j], where
+    each mode has the lowest door-to-door time in `variant`. Unlike the multinomial-logit sanity
+    section above, this asks a simpler question ('which mode wins the race') with no car-ownership
+    gating and no distance-decay -- see the task/report caveat printed next to it."""
+    zones = ta.zones
+    n = len(zones)
+    mode_w: dict[str, float] = defaultdict(float)
+    total = 0.0
+    times = ta.times[variant]
+    for i, zi in enumerate(zones):
+        for j, zj in enumerate(zones):
+            if i == j:
+                continue
+            w = zi.population * weight_by_zone_id.get(zj.id, 0.0)
+            if w <= 0:
+                continue
+            idx = i * n + j
+            best_mode = min(ta.modes, key=lambda m: times[m][idx])
+            mode_w[best_mode] += w
+            total += w
+    return {m: mode_w.get(m, 0.0) / total for m in ta.modes} if total else {}
+
+
+def write_sanity_report(
+    access: TransitAccess,
+    elapsed: float,
+    before_access: TransitAccess | None = None,
+    bike_climb_penalties: list[tuple[float, str, str, float, float]] | None = None,
+) -> None:
     zones = access.zones
     n = len(zones)
 
@@ -1055,6 +1290,7 @@ def write_sanity_report(access: TransitAccess, elapsed: float) -> None:
         "sant_andreu": 0.45, "sant_marti": 0.40,
     }  # data/processed/districts.json::car_ownership (T1 output), duplicated here to avoid an
     # import-time coupling to that file's exact schema; see districts.json for the sourced values.
+    districts_json: list[dict] | None = None
     try:
         districts_json = json.loads((PROCESSED / "districts.json").read_text())
         car_ownership_by_district = {d["id"]: d["car_ownership"] for d in districts_json}
@@ -1143,6 +1379,44 @@ def write_sanity_report(access: TransitAccess, elapsed: float) -> None:
         "and low-speed-mode shares are correspondingly understated here and metro/bike/car "
         "overstated. This is a sanity report, not a gate (docs/TRANSIT_ACCESS.md).\n"
     )
+    weights, used_jobs_share = dest_weight_by_zone_id(zones, districts_json)
+    weight_note = (
+        "population_i x job_weight_j x (district_j's share of citywide jobs, from districts.json "
+        "jobs_per_resident x population)" if used_jobs_share else
+        "population_i x job_weight_j (districts.json jobs data unavailable; district jobs-share "
+        "factor dropped, per the task's documented fallback)"
+    )
+    after_shares = fastest_mode_shares(access, weights, "base")
+    lines_out.append("\n## Fastest mode by OD pair, before vs after this change (elevation-aware bike/walk)\n")
+    lines_out.append(
+        f"OD-pair weight = {weight_note}. Share of all i!=j zone pairs (base variant; metro/bus/car "
+        "identical before/after) where each mode has the lowest door-to-door time.\n\n"
+    )
+    if before_access is not None:
+        before_shares = fastest_mode_shares(before_access, weights, "base")
+        lines_out.append("| mode | before (flat bike/walk) | after (elevation-aware) |\n|---|---|---|\n")
+        for mode in access.modes:
+            lines_out.append(f"| {mode} | {before_shares.get(mode, 0):.1%} | {after_shares.get(mode, 0):.1%} |\n")
+    else:
+        lines_out.append(
+            "(no previously-built data/processed/transit_access.json found -- before/after "
+            "comparison skipped this run; showing after only)\n\n"
+        )
+        lines_out.append("| mode | after (elevation-aware) |\n|---|---|\n")
+        for mode in access.modes:
+            lines_out.append(f"| {mode} | {after_shares.get(mode, 0):.1%} |\n")
+
+    lines_out.append("\n## Top 10 largest uphill bike climb penalties (zone centroid to zone centroid)\n")
+    lines_out.append(
+        f"Climb penalty = net ascent / {access.assumptions['bike_climb_m_per_min']:.0f} m per minute "
+        "(assumptions.bike_climb_m_per_min); descents get no bonus.\n\n"
+    )
+    lines_out.append("| climb penalty (min) | from (elev) | to (elev) | ascent (m) |\n|---|---|---|---|\n")
+    for penalty, a, b, elev_a, elev_b in bike_climb_penalties or []:
+        lines_out.append(
+            f"| {penalty:.1f} | {a} ({elev_a:.0f}m) | {b} ({elev_b:.0f}m) | {elev_b - elev_a:.0f} |\n"
+        )
+
     lines_out.append("\n## Top 20 zone pairs by L9 metro time gain (base - l9_central)\n")
     lines_out.append("| gain (min) | from | to | base | l9_central |\n|---|---|---|---|---|\n")
     for gain, a, b, before, after in gains[:20]:
@@ -1223,6 +1497,7 @@ Generated by `scripts/build_transit_access.py` (raw inputs fetched by
 | L9/L10 central section: 7 of 8 new stations | opendata (OSM) | OpenStreetMap via Overpass API | 2026-09-25 snapshot | https://overpass-api.de/api/interpreter | Campus Nord, Manuel Girona, Mandri, El Putxet, Sanllehy, Guinardo-Hospital de Sant Pau, Travessera de Dalt: real OSM nodes tagged `railway=construction` or `railway=proposed` (Travessera de Dalt is OSM's working name "Muntanya") with surveyed/planned coordinates. Official project reference: https://www.amb.cat/es/web/territori/infraestructures-metropolitanes/projectes-infraestructures/detall/-/infraestructura/metro-l9-l10--zona-universitaria-sagrera/339081/11656 |
 | L9/L10 central section: Prat de la Riba | approximate | -- | -- | -- | No `railway=construction`/`proposed` OSM node found for this station. Placed at the midpoint of two OSM bus stops named after the street ("Pg Sant Joan Bosco - Prat de la Riba", "Av Sarria - Prat de la Riba"); `approx: true` in `transit_access.json`. A Nominatim geocode of "Avinguda de Prat de la Riba, Barcelona, Spain" resolved to an unrelated street in Palleja, so was not used as the coordinate. |
 | travel-time model, coverage radius | derived | -- | -- | -- | Implements `docs/TRANSIT_ACCESS.md`'s "Travel-time model" table exactly; every constant is recorded in `transit_access.json`'s `assumptions`. |
+| elevation (bike/walk climb penalty) | opendata (via OpenTopoData) | `eudem25m` (Copernicus EU-DEM v1.1, ~25m) | -- | https://api.opentopodata.org/v1/eudem25m | Ground elevation (m) looked up per point (all census-section population points, all zone centroids, all rail stations) via the OpenTopoData API, cached in `data/raw/transit/elevations_eudem25m.json` (gitignored), never invented. Used for the bike/walk net-ascent climb penalty; see `assumptions.walk_climb_m_per_min` / `bike_climb_m_per_min`. |
 """
     path.write_text(text + addition)
     print("[build] appended Transit access section to", path)
