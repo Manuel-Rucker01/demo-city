@@ -12,9 +12,10 @@ import { registerChartTheme } from "./charts/theme";
 import { aggregateMoves } from "./data/sankey";
 import { Playback, type SpeedMultiplier } from "./playback/Playback";
 import { parseRecordParams, mountRecordOverlay } from "./record/RecordMode";
+import { DistrictMetroLabels } from "./map/DistrictMetroLabels";
 import { DISTRICT_COLORS } from "./style/theme";
-import { DISTRICT_IDS, type RunIndex } from "./data/types";
-import { districtDisplayName, formatCurrencyCompact } from "./data/format";
+import { DISTRICT_IDS, type DistrictId, type RunIndex, type TransitLinePolicy } from "./data/types";
+import { districtDisplayName, formatCurrencyCompact, formatPercent } from "./data/format";
 
 registerChartTheme();
 
@@ -34,6 +35,7 @@ app.innerHTML = `
         <button data-mode="employed">Employment</button>
         <button data-mode="satisfaction">Satisfaction</button>
         <button data-mode="commute">Commute</button>
+        <button data-mode="metro">Metro</button>
       </div>
       <select id="fill-metric">
         <option value="avg_rent">Fill: avg rent</option>
@@ -41,6 +43,7 @@ app.innerHTML = `
         <option value="avg_satisfaction">Fill: satisfaction</option>
         <option value="tourist_units">Fill: tourist units</option>
         <option value="shops_open">Fill: shops open</option>
+        <option value="metro_share">Fill: metro share</option>
       </select>
     </div>
   </header>
@@ -67,6 +70,7 @@ app.innerHTML = `
       </div>
       <div class="tab-panel" data-tab-panel="mobility" style="display:none">
         <div class="chart-slot" id="mode-share-chart"></div>
+        <div class="chart-slot" id="metro-mode-chart" style="display:none"></div>
         <div class="chart-slot" id="migration-chart"></div>
       </div>
       <div class="chart-slot sankey" id="sankey-chart"></div>
@@ -94,6 +98,9 @@ const fillMetricSelect = document.getElementById("fill-metric") as HTMLSelectEle
 const loadingEl = document.getElementById("loading") as HTMLDivElement;
 const legendRow = document.getElementById("legend-row") as HTMLDivElement;
 const chartTabs = document.getElementById("chart-tabs") as HTMLDivElement;
+const sankeyEl = document.getElementById("sankey-chart") as HTMLDivElement;
+const metroModeChartEl = document.getElementById("metro-mode-chart") as HTMLDivElement;
+const modeShareChartEl = document.getElementById("mode-share-chart") as HTMLDivElement;
 const playBtn = document.getElementById("play-btn") as HTMLButtonElement;
 const speedGroup = document.getElementById("speed-group") as HTMLDivElement;
 const scrub = document.getElementById("scrub") as HTMLInputElement;
@@ -120,8 +127,12 @@ function activateTab(tab: string): void {
     shopsChart.resize();
   } else if (tab === "mobility") {
     modeShareChart.resize();
+    metroShareChart.resize();
     migrationChart.resize();
   }
+  // The Sankey is noisy on video and adds nothing to the metro-share story — hide it in record
+  // mode specifically while the Mobility tab is showing.
+  sankeyEl.style.display = record.enabled && tab === "mobility" ? "none" : "";
 }
 chartTabs.addEventListener("click", (e) => {
   const btn = (e.target as HTMLElement).closest("button");
@@ -155,9 +166,16 @@ const shopsChart = new LineChartPanel(
   (v) => `${Math.round(v)}`,
   { tooltipsEnabled },
 );
-const modeShareChart = new StackedAreaPanel(document.getElementById("mode-share-chart") as HTMLDivElement, { tooltipsEnabled });
+const modeShareChart = new StackedAreaPanel(modeShareChartEl, { tooltipsEnabled });
+// Record-mode-only alternative to the city-wide stacked area: metro share over time for just the
+// policy districts (scenario solid, base dashed) — a much clearer "new metro line" story than the
+// stacked area, which buries the effect under bus/car/bike/walk for the whole city. Shown only
+// when the loaded scenario actually has a new_transit_line policy (see renderCharts()).
+const metroShareChart = new LineChartPanel(metroModeChartEl, "Metro mode share · policy districts", (v) => formatPercent(v, 0), {
+  tooltipsEnabled,
+});
 const migrationChart = new BarPanel(document.getElementById("migration-chart") as HTMLDivElement, { tooltipsEnabled });
-const sankeyChart = new SankeyPanel(document.getElementById("sankey-chart") as HTMLDivElement);
+const sankeyChart = new SankeyPanel(sankeyEl);
 
 interface RunSlot {
   runId: string;
@@ -165,18 +183,43 @@ interface RunSlot {
   loaded: LoadedRun;
   mapView: MapView;
   slotEl: HTMLDivElement;
+  metroLabels: DistrictMetroLabels | null;
+  /** Day-1 metro mode share per policy district for this run, used as the "from X%" baseline. */
+  metroBaseline: Partial<Record<DistrictId, number>>;
 }
 
 let slots: RunSlot[] = [];
 let playback: Playback | null = null;
-// Optional initial dot colouring from the URL (e.g. ?color=commute), used by recording mode.
-const COLOR_MODES: readonly ColorMode[] = ["district", "employed", "satisfaction", "commute"];
-const colorParam = new URLSearchParams(window.location.search).get("color") as ColorMode | null;
+// Optional initial dot colouring/fill from the URL (e.g. ?color=metro&fill=metro_share), used by
+// recording mode.
+const COLOR_MODES: readonly ColorMode[] = ["district", "employed", "satisfaction", "commute", "metro"];
+const FILL_METRICS: readonly FillMetric[] = [
+  "avg_rent",
+  "unemployment_rate",
+  "avg_satisfaction",
+  "tourist_units",
+  "shops_open",
+  "metro_share",
+];
+const urlSearchParams = new URLSearchParams(window.location.search);
+const colorParam = urlSearchParams.get("color") as ColorMode | null;
 let colorMode: ColorMode = colorParam && COLOR_MODES.includes(colorParam) ? colorParam : "district";
-let fillMetric: FillMetric = "avg_rent";
+const fillParam = urlSearchParams.get("fill") as FillMetric | null;
+let fillMetric: FillMetric = fillParam && FILL_METRICS.includes(fillParam) ? fillParam : "avg_rent";
 let lastTickIndex = 0;
 let compareMode = false;
 let runIndex: RunIndex = [];
+// The "new metro line" story: set once the scenario's own policies are known (setup()), used by
+// renderCharts() (metro-share line chart), the on-map labels, and the "new metro line opens"
+// caption below.
+let transitPolicy: TransitLinePolicy | null = null;
+let metroCaptionEl: HTMLDivElement | null = null;
+let metroCaptionShown = false;
+
+// Sync the header controls to whatever `colorMode`/`fillMetric` the URL asked for (they're hidden
+// in record mode anyway via CSS, but this keeps the interactive UI honest too).
+[...colorModeGroup.children].forEach((c) => (c as HTMLElement).classList.toggle("active", (c as HTMLElement).dataset.mode === colorMode));
+fillMetricSelect.value = fillMetric;
 
 const SCENARIO_LABELS: Record<string, string> = {
   base: "Base",
@@ -212,15 +255,18 @@ async function buildMapSlot(runId: string, label: "base" | "scenario"): Promise<
   const mapView = new MapView({ container: slotEl, geo, agents: loaded.combinedAgents, pitch: record.enabled ? 20 : 0 });
   mapView.setColorMode(colorMode);
   mapView.setFillMetric(fillMetric);
-  return { runId, label, loaded, mapView, slotEl };
+  return { runId, label, loaded, mapView, slotEl, metroLabels: null, metroBaseline: {} };
 }
 
 function destroySlots(): void {
   for (const s of slots) {
     s.mapView.destroy();
+    s.metroLabels?.destroy();
     s.slotEl.remove();
   }
   slots = [];
+  metroCaptionEl = null;
+  metroCaptionShown = false;
 }
 
 async function setup(baseRunId: string, compareRunId: string | null): Promise<void> {
@@ -232,6 +278,41 @@ async function setup(baseRunId: string, compareRunId: string | null): Promise<vo
   const newSlots: RunSlot[] = [await buildMapSlot(baseRunId, "base")];
   if (compareRunId) newSlots.push(await buildMapSlot(compareRunId, "scenario"));
   slots = newSlots;
+
+  // "New metro line" story setup: find the new_transit_line policy on whichever slot has it
+  // (only the scenario run does — base has no policies), then, in record mode, pin a live
+  // metro-share label to each policy district on every map and a fading "line opens" caption on
+  // the scenario map.
+  transitPolicy =
+    (slots.flatMap((s) => s.loaded.meta.scenario.policies).find((p) => p.type === "new_transit_line") as
+      | TransitLinePolicy
+      | undefined) ?? null;
+
+  if (record.enabled && transitPolicy) {
+    const policyDistricts = transitPolicy.districts;
+    for (const s of slots) {
+      const firstTick = s.loaded.ticks[0];
+      for (const did of policyDistricts) {
+        const share = firstTick?.districts.find((d) => d.id === did)?.mode_share?.metro;
+        if (share != null) s.metroBaseline[did] = share;
+      }
+      const specs = policyDistricts
+        .map((did) => {
+          const profile = s.loaded.meta.profiles.find((p) => p.id === did);
+          return profile ? { id: did, lon: profile.centroid[0], lat: profile.centroid[1] } : null;
+        })
+        .filter((x): x is { id: DistrictId; lon: number; lat: number } => x !== null);
+      s.metroLabels = new DistrictMetroLabels(s.slotEl, s.mapView.map, specs);
+    }
+    const scenarioSlot = slots.find((s) => s.label === "scenario");
+    if (scenarioSlot) {
+      const caption = document.createElement("div");
+      caption.className = "metro-caption";
+      caption.textContent = `New metro line opens · day ${transitPolicy.start_tick}`;
+      scenarioSlot.slotEl.appendChild(caption);
+      metroCaptionEl = caption;
+    }
+  }
 
   const maxTick = Math.min(...slots.map((s) => s.loaded.state.nTicks));
   playback = new Playback(maxTick);
@@ -294,8 +375,24 @@ function renderCharts(): void {
   }));
   shopsChart.setData(shopsSpecs, policies);
 
+  // Record mode + an actual new_transit_line scenario: swap the city-wide stacked area for a
+  // focused metro-share-over-time line chart of just the policy districts (scenario solid, base
+  // dashed) — the stacked area buries the story under bus/car/bike/walk for the whole city.
+  const showMetroLineChart = record.enabled && !!transitPolicy;
+  modeShareChartEl.style.display = showMetroLineChart ? "none" : "";
+  metroModeChartEl.style.display = showMetroLineChart ? "" : "none";
+  if (showMetroLineChart && transitPolicy) {
+    const metroSpecs = slots.map((s) => ({
+      runLabel: s.label,
+      ticks: s.loaded.ticks,
+      metric: (d: { mode_share?: Partial<Record<string, number>> }) => d.mode_share?.metro ?? 0,
+    }));
+    metroShareChart.setData(metroSpecs, policies, transitPolicy.districts);
+    metroShareChart.resize();
+  }
+
   if (primary) {
-    modeShareChart.setData(primary.loaded.ticks, policies);
+    if (!showMetroLineChart) modeShareChart.setData(primary.loaded.ticks, policies);
     migrationChart.setData(primary.loaded.ticks);
   }
 }
@@ -328,9 +425,25 @@ function onPlaybackChange(state: { tickIndex: number; playing: boolean; speed: n
     if (state.tickIndex > 0) {
       const rec = s.loaded.ticks[state.tickIndex - 1];
       if (rec) s.mapView.setDistrictSnapshots(rec.districts);
+      if (s.metroLabels && transitPolicy) {
+        const current: Partial<Record<DistrictId, number>> = {};
+        for (const did of transitPolicy.districts) {
+          current[did] = rec?.districts.find((d) => d.id === did)?.mode_share?.metro;
+        }
+        s.metroLabels.update(current, s.metroBaseline, s.label === "scenario");
+      }
     }
   }
   lastTickIndex = state.tickIndex;
+
+  // "New metro line opens" caption: fires once, the first tick the playback crosses the policy's
+  // start_tick, then fades itself out ~4s later (see .metro-caption.show in app.css).
+  if (metroCaptionEl && transitPolicy && !metroCaptionShown && state.tickIndex >= transitPolicy.start_tick) {
+    metroCaptionShown = true;
+    const el = metroCaptionEl;
+    el.classList.add("show");
+    window.setTimeout(() => el.classList.remove("show"), 4000);
+  }
 
   if (primary) {
     kpiTiles.update({
@@ -345,6 +458,7 @@ function onPlaybackChange(state: { tickIndex: number; playing: boolean; speed: n
     touristChart.setCursor(cursor);
     shopsChart.setCursor(cursor);
     modeShareChart.setCursor(cursor);
+    metroShareChart.setCursor(cursor);
     sankeyChart.setLinks(aggregateMoves(primary.loaded.ticks, state.tickIndex - 1));
   }
 }
@@ -395,6 +509,7 @@ window.addEventListener("resize", () => {
   touristChart.resize();
   shopsChart.resize();
   modeShareChart.resize();
+  metroShareChart.resize();
   migrationChart.resize();
   sankeyChart.resize();
 });
@@ -430,6 +545,9 @@ async function boot(): Promise<void> {
   const urlParams = new URLSearchParams(window.location.search);
   const urlRun = urlParams.get("run") ?? record.run;
   const urlCompare = urlParams.get("compare") ?? record.compare;
+  // `?tab=mobility` selects the Mobility & migration tab at start (e.g. for the metro-line story).
+  const urlTab = urlParams.get("tab");
+  if (urlTab && tabPanels.has(urlTab)) activateTab(urlTab);
   const initialRunId = (urlRun && runIndex.some((r) => r.run_id === urlRun)) ? urlRun : base?.run_id ?? "";
   const initialCompareId = (urlCompare && runIndex.some((r) => r.run_id === urlCompare)) ? urlCompare : null;
 

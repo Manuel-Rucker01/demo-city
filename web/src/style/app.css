@@ -366,6 +366,72 @@ body.record-mode #app {
   border: 1px solid var(--border);
 }
 
+/* ---- "new metro line" story: on-map district labels + line-opens caption (record mode) ---- */
+
+.metro-label-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 15;
+  pointer-events: none;
+}
+
+.metro-label {
+  position: absolute;
+  top: 0;
+  left: 0;
+  text-align: center;
+  white-space: nowrap;
+  font-family: "Inter Tight", "Inter", sans-serif;
+  text-shadow:
+    0 1px 3px rgba(0, 0, 0, 0.9),
+    0 0 10px rgba(0, 0, 0, 0.7);
+}
+
+.metro-label-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg);
+  opacity: 0.9;
+}
+
+.metro-label-value {
+  font-size: 24px;
+  font-weight: 800;
+  line-height: 1.1;
+  color: #8ec4ff;
+}
+
+.metro-label-from {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-dim);
+}
+
+.metro-caption {
+  position: absolute;
+  top: 54px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 20;
+  opacity: 0;
+  transition: opacity 0.8s ease;
+  font-family: "Inter Tight", "Inter", sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--fg);
+  background: rgba(7, 9, 13, 0.68);
+  border: 1px solid rgba(77, 171, 247, 0.45);
+  border-radius: 8px;
+  padding: 6px 14px;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+
+.metro-caption.show {
+  opacity: 1;
+}
+
 .record-footer {
   position: absolute;
   bottom: 18px;

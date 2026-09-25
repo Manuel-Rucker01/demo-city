@@ -65,16 +65,18 @@ export class LineChartPanel {
     };
   }
 
-  /** Render one or two (compare) run series, one line per district. `policies` (usually
-   * `meta.scenario.policies`) draws a short markLine annotation per policy start/end. */
-  setData(specs: LineSeriesSpec[], policies: Policy[] = []): void {
+  /** Render one or two (compare) run series, one line per district (or per `districts`, when
+   * given — e.g. the metro-share story chart only wants the policy districts, not all ten).
+   * `policies` (usually `meta.scenario.policies`) draws a short markLine annotation per policy
+   * start/end. */
+  setData(specs: LineSeriesSpec[], policies: Policy[] = [], districts: readonly DistrictId[] = DISTRICT_IDS): void {
     const dates = specs[0]?.ticks.map((t) => t.date) ?? [];
     const series: echarts.SeriesOption[] = [];
     const hasHighlight = specs.some((s) => s.highlightDistrict);
     this.policies = policies;
 
     for (const spec of specs) {
-      for (const did of DISTRICT_IDS) {
+      for (const did of districts) {
         const data = spec.ticks.map((t) => {
           const d = t.districts.find((x) => x.id === did);
           return d ? spec.metric(d) : null;

@@ -13,7 +13,10 @@ import {
   COMMUTE_MODE_UNKNOWN_COLOR,
   DISTRICT_COLORS_RGB,
   EMPLOYED_COLOR,
+  METRO_OTHER_COLOR,
+  METRO_RIDER_COLOR,
   UNEMPLOYED_COLOR,
+  metroBlueRamp,
   viridis,
 } from "../style/theme";
 
@@ -27,8 +30,14 @@ import {
 // always imported before a MapView is constructed.
 maplibregl.setWorkerUrl("/vendor/maplibre-gl/maplibre-gl-worker.mjs");
 
-export type ColorMode = "district" | "employed" | "satisfaction" | "commute";
-export type FillMetric = "avg_rent" | "unemployment_rate" | "avg_satisfaction" | "tourist_units" | "shops_open";
+export type ColorMode = "district" | "employed" | "satisfaction" | "commute" | "metro";
+export type FillMetric =
+  | "avg_rent"
+  | "unemployment_rate"
+  | "avg_satisfaction"
+  | "tourist_units"
+  | "shops_open"
+  | "metro_share";
 
 const BARCELONA_CENTER: [number, number] = [2.17, 41.4];
 const DARK_STYLE = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
@@ -112,6 +121,10 @@ export class MapView {
   private baseAlpha: Uint8Array;
   /** Alpha actually drawn this frame; recomputed every frame from baseAlpha + any fade anim. */
   private renderAlpha: Uint8Array;
+  /** Per-agent alpha multiplier (0-255) applied on top of renderAlpha, used by `color=metro` to
+   * dim non-metro riders without disturbing the active/inactive/fade alpha logic above. 255
+   * (no-op) for every other color mode. */
+  private alphaScale: Uint8Array;
   private allDistrictPositions: Map<DistrictId, Float64Array>;
   private cityBounds: [[number, number], [number, number]];
   private cityCenter: [number, number];
@@ -140,6 +153,7 @@ export class MapView {
     this.colors = new Uint8Array(opts.agents.length * 3);
     this.baseAlpha = new Uint8Array(opts.agents.length).fill(235);
     this.renderAlpha = new Uint8Array(opts.agents.length).fill(235);
+    this.alphaScale = new Uint8Array(opts.agents.length).fill(255);
     this.allDistrictPositions = precomputeAllDistrictPositions(
       opts.agents.map((a) => a.id),
       opts.geo,
@@ -203,7 +217,8 @@ export class MapView {
     if (this.fillMetric === "unemployment_rate") return s.unemployment_rate;
     if (this.fillMetric === "avg_satisfaction") return s.avg_satisfaction;
     if (this.fillMetric === "tourist_units") return s.tourist_units ?? 0;
-    return s.shops_open ?? 0;
+    if (this.fillMetric === "shops_open") return s.shops_open ?? 0;
+    return s.mode_share?.metro ?? 0; // metro_share
   }
 
   /** Apply the current per-agent state (home district, employed, satisfaction, active) for one
@@ -291,10 +306,15 @@ export class MapView {
     else if (this.colorMode === "employed") rgb = employed ? EMPLOYED_COLOR : UNEMPLOYED_COLOR;
     else if (this.colorMode === "commute") {
       rgb = commuteMode ? (COMMUTE_MODE_COLORS[commuteMode] ?? COMMUTE_MODE_UNKNOWN_COLOR) : COMMUTE_MODE_UNKNOWN_COLOR;
+    } else if (this.colorMode === "metro") {
+      rgb = commuteMode === "metro" ? METRO_RIDER_COLOR : METRO_OTHER_COLOR;
     } else rgb = viridis(satisfaction);
     this.colors[i * 3] = rgb[0];
     this.colors[i * 3 + 1] = rgb[1];
     this.colors[i * 3 + 2] = rgb[2];
+    // Only "metro" dims non-matching agents via alpha; every other mode draws everyone at full
+    // strength (alpha handled separately by active/inactive + fade animations).
+    this.alphaScale[i] = this.colorMode === "metro" && commuteMode !== "metro" ? 60 : 255;
   }
 
   private recolorAll(): void {
@@ -393,7 +413,7 @@ export class MapView {
         this.colors[index * 3]!,
         this.colors[index * 3 + 1]!,
         this.colors[index * 3 + 2]!,
-        this.renderAlpha[index]!,
+        Math.round((this.renderAlpha[index]! * this.alphaScale[index]!) / 255),
       ],
       // Larger, brighter dots so they read clearly over the (now much subtler) choropleth fill.
       getRadius: 12,
@@ -453,6 +473,13 @@ export class MapView {
         if (!snap) return [255, 255, 255, 8];
         const [lo, hi] = this.fillDomain;
         const v = hi > lo ? (this.metricValue(snap) - lo) / (hi - lo) : 0.5;
+        // metro_share gets its own higher-alpha single-hue blue ramp so the "new line opens"
+        // story reads clearly on video, instead of the generally-subtle viridis fill (~13% alpha)
+        // used for every other metric.
+        if (this.fillMetric === "metro_share") {
+          const [r, g, b] = metroBlueRamp(v);
+          return [r, g, b, 130];
+        }
         const [r, g, b] = viridis(v);
         return [r, g, b, 34];
       },
@@ -462,6 +489,10 @@ export class MapView {
         if (!snap) return [255, 255, 255, 70];
         const [lo, hi] = this.fillDomain;
         const v = hi > lo ? (this.metricValue(snap) - lo) / (hi - lo) : 0.5;
+        if (this.fillMetric === "metro_share") {
+          const [r, g, b] = metroBlueRamp(v);
+          return [r, g, b, 220];
+        }
         const [r, g, b] = viridis(v);
         return [r, g, b, 190];
       },
