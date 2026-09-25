@@ -21,6 +21,9 @@ const args = Object.fromEntries(
 const base = args.base ?? "http://localhost:5180";
 const out = resolve(args.out ?? "media/jevcity.mp4");
 const tail = Number(args.tail ?? 2.5); // seconds to keep after the last day
+// Record slowly, play back faster: frame capture tops out around ~11 fps, so recording at a
+// lower sim speed and speeding the video up by `speedup` gives a smoother result.
+const speedup = Number(args.speedup ?? 1);
 const params = new URLSearchParams({
   record: "1",
   run: args.run ?? "base-or3-s1",
@@ -28,6 +31,8 @@ const params = new URLSearchParams({
   speed: args.speed ?? "2",
   ...(args.color ? { color: args.color } : {}),
   ...(args.title ? { title: args.title } : {}),
+  ...(args.fill ? { fill: args.fill } : {}),
+  ...(args.tab ? { tab: args.tab } : {}),
 });
 const url = `${base}/?${params}`;
 const framesDir = join(dirname(out), "frames");
@@ -74,7 +79,7 @@ console.log(`captured ${frames.length} frames over ${seconds.toFixed(1)} s (${(f
 
 execFileSync("ffmpeg", [
   "-y", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i", list,
-  "-vf", "fps=30,scale=1920:1080:flags=lanczos,format=yuv420p",
+  "-vf", `setpts=PTS/${speedup},fps=30,scale=1920:1080:flags=lanczos,format=yuv420p`,
   "-c:v", "libx264", "-preset", "slow", "-crf", "18", "-movflags", "+faststart", out,
 ], { stdio: "inherit" });
 rmSync(framesDir, { recursive: true, force: true });
