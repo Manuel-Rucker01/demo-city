@@ -389,3 +389,28 @@ def test_python_dash_m_jevcity_works():
     )
     assert result.returncode == 0
     assert "== mock ==" in result.stdout
+
+
+def test_estimate_probe_ignores_env_provider(monkeypatch):
+    """Regression: env JEV_PROVIDER must not turn the mock estimate probe into real calls."""
+    import asyncio
+
+    from jevcity import cli
+    from jevcity.scenarios.loader import load_scenario
+
+    seen = []
+
+    async def fake_run_simulation(scenario, run_dir, backend=None):
+        import os
+
+        seen.append(os.environ.get("JEV_PROVIDER"))
+        return "summary"
+
+    monkeypatch.setenv("JEV_PROVIDER", "openrouter")
+    monkeypatch.setattr(cli.engine_loop, "run_simulation", fake_run_simulation)
+    scenario = load_scenario("scenarios/base.yaml")
+    assert asyncio.run(cli._run_mock_probe(scenario, 2)) == "summary"
+    assert seen == [None]
+    import os
+
+    assert os.environ["JEV_PROVIDER"] == "openrouter"  # restored afterwards

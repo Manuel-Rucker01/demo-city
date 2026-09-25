@@ -17,6 +17,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import os
 import shutil
 import sys
 from datetime import UTC, datetime
@@ -130,9 +131,17 @@ async def _run_mock_probe(scenario: Scenario, ticks: int):
     probe_scenario.jev = probe_scenario.jev.model_copy(
         update={"provider": "mock", "replay_from": None}
     )
-    with tempfile.TemporaryDirectory() as tmp:
-        run_dir = Path(tmp) / "estimate-probe"
-        return await engine_loop.run_simulation(probe_scenario, run_dir)
+    # The probe must NEVER reach a real provider: env JEV_PROVIDER overrides scenario.jev.provider
+    # inside the adapter, so hide it for the duration of the probe (a real provider here once
+    # made every `run`/`batch` spend ~30 ticks of real calls before starting).
+    saved_provider = os.environ.pop("JEV_PROVIDER", None)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp) / "estimate-probe"
+            return await engine_loop.run_simulation(probe_scenario, run_dir)
+    finally:
+        if saved_provider is not None:
+            os.environ["JEV_PROVIDER"] = saved_provider
 
 
 def _estimate_scenario(scenario: Scenario, provider: str, settings) -> dict:
