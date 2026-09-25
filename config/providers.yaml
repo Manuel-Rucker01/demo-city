@@ -79,3 +79,21 @@ vercel:
     - "Response `model` is 'typesafe-ai/jev' in docs examples: exact Jev version is not documented; routing metadata and generationId are logged instead."
     - "Native /v1/evaluate examples show no `confidence` or `legend`; if absent, confidence is computed locally and flagged."
     - "Context length and pinned model ids are not documented."
+
+local:
+  # Any TypeSafe-compatible /v1/systemone server on this machine: an open-weight decision model
+  # (Kev, Decider, ...) behind an optional calibrating proxy. See docs/LOCAL_MODELS.md.
+  base_url: "http://127.0.0.1:8300"
+  path: "/v1/systemone"
+  wire: systemone
+  api_key_env: null                  # no key: local server
+  default_model: local
+  rpm_limit: null                    # the server serializes requests; concurrency is what matters
+  tps_limit: null
+  max_context_tokens: 32000
+  max_state_plus_question_tokens: null
+  max_questions_per_request: 32
+  price_per_mtok_usd: 0.0
+  docs: []
+  todo:
+    - "Answers come from whichever model the local server runs; the response `model` names it."

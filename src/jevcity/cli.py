@@ -32,7 +32,7 @@ from jevcity.runlog import reader as runlog_reader
 from jevcity.scenarios import loader as scenario_loader
 from jevcity.types import Scenario
 
-_PROVIDER_CHOICES = ("mock", "typesafe", "openrouter", "vercel")
+_PROVIDER_CHOICES = ("mock", "typesafe", "openrouter", "vercel", "local")
 _BATCHING_CHOICES = ("quality", "throughput")
 _ESTIMATE_PROBE_TICKS = 30
 _BATCH_MAX_PARALLEL = 4

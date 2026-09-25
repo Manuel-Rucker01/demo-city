@@ -315,7 +315,7 @@ class TickDelta:
 
 # --- Jev adapter ---------------------------------------------------------------------------
 
-ProviderName = Literal["mock", "typesafe", "openrouter", "vercel"]
+ProviderName = Literal["mock", "typesafe", "openrouter", "vercel", "local"]
 WireFormat = Literal["systemone", "vercel_evaluate", "openrouter_decisions"]
 BatchingMode = Literal["quality", "throughput"]
 CostSource = Literal["none", "computed", "reported", "estimated", "mixed"]
