@@ -563,7 +563,7 @@ class RentalSupplyParams(BaseModel):
     renovation_quality_gain: float = 0.3
     quality_decay_capped_monthly: float = 0.01  # quality loss per month when rent is capped
     quality_recovery_monthly: float = 0.005  # recovery per month otherwise (up to 1.0)
-    construction_monthly_share: float = 0.0006  # new units per month as share of stock at base
+    construction_monthly_share: float = 0.00025  # ~0.3%/yr of stock (Barcelona completes ~2-3k homes/yr)
     construction_rent_elasticity: float = 2.0  # response to expected rent vs initial rent
     construction_lag_ticks: int = 540  # ~18 months from decision to completion
     construction_rental_share: float = 0.4  # share of new units entering the rental stock

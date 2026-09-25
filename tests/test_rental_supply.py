@@ -575,3 +575,23 @@ def test_performance_10000_agents_rental_supply_enabled(profiles):
     daily_update_ex(world, agents_dict, scenario, 1, rng)
     elapsed_daily = time.perf_counter() - start
     assert elapsed_daily < 0.05
+
+
+def test_construction_accumulates_fractional_starts_in_small_districts(profiles):
+    """At agent scale a district starts < 1 unit per month; fractions must carry over."""
+    agents = make_population(profiles, 20)
+    world = init_world(profiles, agents)
+    scenario = make_scenario()
+    scenario.rental_supply.construction_lag_ticks = 30
+    before = sum(s.housing_units for s in world.states.values())
+    monthly = sum(
+        scenario.rental_supply.construction_monthly_share * s.housing_units
+        for s in world.states.values()
+    )
+    assert monthly < len(world.states)  # well under one unit per district per month
+    for tick in range(1, 30 * 36 + 1):  # three years
+        rental.process_construction(world, scenario, tick)
+        assert_stock_invariant(world)
+    built = sum(s.housing_units for s in world.states.values()) - before
+    assert built >= int(monthly * 34) - len(world.states)  # ~35 months of completions
+    assert built > 0

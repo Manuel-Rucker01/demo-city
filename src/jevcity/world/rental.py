@@ -302,7 +302,17 @@ def process_construction(world: World, scenario: Scenario, tick: int) -> None:
             if initial_rent > 0:
                 er = expected_rent(state)
                 factor = max(0.0, 1.0 + params.construction_rent_elasticity * (er / initial_rent - 1.0))
-                starts = round(params.construction_monthly_share * state.housing_units * factor)
+                # Accumulate fractional starts: at agent scale a district starts well under one
+                # unit per month, so rounding each month would always give zero.
+                accum = getattr(world, "_construction_accum", None)
+                if accum is None:
+                    accum = {}
+                    world._construction_accum = accum  # type: ignore[attr-defined]
+                accum[did] = accum.get(did, 0.0) + (
+                    params.construction_monthly_share * state.housing_units * factor
+                )
+                starts = int(accum[did])
+                accum[did] -= starts
                 if starts > 0:
                     state.construction_pipeline.append((tick + params.construction_lag_ticks, starts))
 
