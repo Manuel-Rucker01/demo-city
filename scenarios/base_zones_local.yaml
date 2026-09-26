@@ -1,0 +1,8 @@
+extends: base_zones.yaml
+name: base_zones_local
+description: >-
+  base_zones run against a local open-weight decision model (JEV_PROVIDER=local): the local
+  server answers one request at a time, so few requests in flight and a long timeout.
+jev:
+  max_concurrency: 2
+  timeout_s: 300

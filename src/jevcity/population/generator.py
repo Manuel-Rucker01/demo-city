@@ -120,6 +120,7 @@ from jevcity.types import (
     Tenure,
     World,
 )
+from jevcity.world import network
 
 _ADULT_BUCKETS = ("18-34", "35-49", "50-64", "65+")
 _BUCKET_AGE_RANGE = {
@@ -753,6 +754,17 @@ def spawn_arrivals(
                 arrived_tick=tick,
             )
         )
+
+    # Zone-level transit network (docs/TRANSIT_ACCESS.md section 2): arrivals get the same
+    # home_zone/job_zone treatment as generate_population, using the same rng so runs stay
+    # deterministic. No-op (no extra rng draws) when world.access is None.
+    if world.access is not None:
+        for agent in agents:
+            agent.home_zone = network.sample_home_zone(world.access, agent.home, rng)
+            if agent.employed and agent.job_district is not None:
+                agent.job_zone = network.sample_job_zone(world.access, agent.job_district, rng)
+            network.repair_commute_mode(world, agent)
+
     return agents
 
 

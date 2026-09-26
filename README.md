@@ -38,6 +38,48 @@ effect is almost certainly larger than a real line would produce. Reproduce with
 In a run without any policy, the city-wide commute mix stays within ~4 points of the 2024 EMEF
 mobility survey it was calibrated to over the whole year.
 
+## Second result: the real L9 central section
+
+The first result gave a whole district the same boost. This one opens the **real** L9/L10 central
+section (Zona Universitària – La Sagrera, 12 stations) on a zone-level model of the city:
+
+- **73 barris.** Each resident lives in one barri and works in another.
+- **Real rail network** from OpenStreetMap: metro, FGC, tram and Rodalies.
+- **Door-to-door times** by mode, with hills for walking and cycling (EU-DEM elevation).
+- **Targeted news.** A resident only hears about the line if their own trip to work gets at least
+  3 min faster, or if a new station is within 600 m of home and no existing one was.
+
+See `docs/TRANSIT_ACCESS.md` and `data/processed/transit_access_report.md`.
+
+![L9 effect](media/l9_effect.png)
+
+Setup: two paired runs, same seed, 1,000 households, one year, real Jev decisions via OpenRouter
+($1.45 for both). The line opens on day 60.
+
+- **25 of 1,000 residents are affected.**
+  - 14 get a faster trip to work, with a median of 8 min saved (range 3–11).
+  - 11 get a new station within walking distance of home.
+- **9 of the 10 affected commuters not already on rail switch to metro:** 7 from the bus, 1 from
+  the car and 1 from walking.
+  - Example: a Sant Andreu resident who drives to Gràcia (31 → 22 min by metro) switches with the
+    line. The same resident in the run without the line keeps the car.
+- **No difference in moves or rents** within the year.
+
+The line is **transversal**. It changes a lot for the few people commuting across the upper city,
+mostly people who take the bus today, and little for everyone else, because most jobs are in the
+centre. The full per-person table is in `media/l9_effect.md`. Reproduce with `scenarios/base_zones.yaml`
+vs `scenarios/l9_central.yaml`, then `scripts/analyze_network_effect.py` and
+`scripts/chart_l9_effect.py`.
+
+Caveats:
+
+- The sample is small: 25 affected residents.
+- Agents take the news at face value, so switching is an upper bound.
+- Jobs by barri use a proxy (ground-floor commercial premises).
+- Prat de la Riba's position is approximate.
+- Showing every mode's travel time in the prompt was tested and rejected. Jev then kept its current
+  commute only 61% of the time, against 99% otherwise. So agents see only their usual trip.
+
 ## What it does
 
 - **World:** all 10 Barcelona districts with population, age, household income and size,

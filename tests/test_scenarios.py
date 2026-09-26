@@ -186,6 +186,10 @@ def test_unknown_key_detected_after_extends_merge(tmp_path):
         "scenarios/new_metro_line.yaml",
         "scenarios/low_emission_zone.yaml",
         "scenarios/combo_policies.yaml",
+        "scenarios/base_zones.yaml",
+        "scenarios/base_zones_local.yaml",
+        "scenarios/l9_central.yaml",
+        "scenarios/l9_central_local.yaml",
     ],
 )
 def test_every_scenario_yaml_loads_and_validates(path):
@@ -196,6 +200,54 @@ def test_every_scenario_yaml_loads_and_validates(path):
     # `districts: None` (unset, inherited from base.yaml) means "every district in the data
     # file" - this expansion's scenarios shouldn't narrow it.
     assert scenario.districts is None
+
+
+# --- T3: zone-level transit network scenarios (docs/TRANSIT_ACCESS.md section 3) -------------
+
+
+def test_base_zones_sets_access_path():
+    scenario = load_scenario("scenarios/base_zones.yaml")
+    assert scenario.access_path is not None
+    assert scenario.access_path.endswith("data/processed/transit_access.json")
+    assert scenario.policies == []
+
+
+def test_l9_central_extends_base_zones_with_transit_network_policy():
+    scenario = load_scenario("scenarios/l9_central.yaml")
+    assert scenario.access_path is not None
+    assert len(scenario.policies) == 1
+    policy = scenario.policies[0]
+    assert policy.type == "transit_network"
+    assert policy.variant == "l9_central"
+    assert policy.label == "L9"
+    assert policy.start_tick == 60
+
+
+def test_local_twins_set_max_concurrency_and_timeout():
+    for path in ("scenarios/base_zones_local.yaml", "scenarios/l9_central_local.yaml"):
+        scenario = load_scenario(path)
+        assert scenario.jev.max_concurrency == 2
+        assert scenario.jev.timeout_s == 300
+
+
+def test_base_zones_and_l9_central_runs_skip_gracefully_without_the_data_file(tmp_path):
+    """data/processed/transit_access.json is built by a parallel task (docs/TRANSIT_ACCESS.md
+    section 1) and may not exist yet in this checkout -- these scenarios must still *load*
+    (proven above); actually running one without the data file should fail with a plain,
+    catchable ValueError (see world/network.py::load_access) rather than something obscure,
+    so a runner can skip cleanly instead of crashing oddly."""
+    import asyncio
+    from pathlib import Path
+
+    from jevcity.engine.loop import run_simulation
+
+    scenario = load_scenario("scenarios/base_zones.yaml")
+    access_path = Path(scenario.access_path)
+    if access_path.exists():
+        pytest.skip("data/processed/transit_access.json exists in this checkout; nothing to prove")
+    scenario = scenario.model_copy(update={"ticks": 2, "n_agents": 10})
+    with pytest.raises(ValueError):
+        asyncio.run(run_simulation(scenario, tmp_path / "run"))
 
 
 def test_hut_ban_2028_policy_fields():

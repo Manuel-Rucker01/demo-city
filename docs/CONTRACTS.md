@@ -156,6 +156,42 @@ process gated by `asyncio.Semaphore(parallel)`, not subprocesses; each run build
 backend, so its rate limiter is per-run, not shared - `--parallel P` against a real provider
 multiplies the effective request rate by up to P.
 
+## Zones and network variants (world/network.py, T3)
+
+Entirely opt-in via `Scenario.access_path` (full contract: docs/TRANSIT_ACCESS.md). Unset ->
+every function below is a no-op / returns `None`, `world.access` stays `None`, and nothing else
+in the tick pipeline changes - proven by a byte-identical-output test (`tests/test_network.py`).
+
+- **Loading**: `engine/loop.py`'s `run_simulation` calls `network.load_access(scenario.access_path)`
+  + `network.validate_access(access, {district ids})` right after building `world` (before
+  agents get zones), and sets `world.access` / `world.network_variant = "base"`.
+  `scenarios/loader.py`'s `_resolve_access_path` resolves a relative `access_path` the same way
+  `data_path` is (CWD, then repo root).
+- **Zones on agents**: `Agent.home_zone` / `.job_zone` are drawn with `network.sample_home_zone`
+  / `sample_job_zone` (population- / job_weight-weighted, using the engine's rng) at population
+  generation (`engine/loop.py`, right after `generate_population`), on arrival
+  (`population/generator.py::spawn_arrivals`, gated on `world.access is not None`), on a MOVE
+  (`world/market.py::apply_decisions`, redraws `home_zone` in the new district) and on a
+  JOB_SEARCH match (redraws `job_zone` in the new job district).
+- **Active variant**: `world/market.py::apply_policies` sets `world.network_variant` from
+  `network.active_variant(scenario, tick)` every tick (cheap and idempotent even with no
+  `TransitNetworkPolicy`), plus a private `world._network_policy` cache (the currently active
+  policy or `None`) so `events/triggers.py` can read its `label`/`min_gain_minutes` without
+  `detect_events` needing `scenario` threaded through it.
+- **Awareness events**: `events/triggers.py::detect_events` detects `world.network_variant`
+  changing (another lazily-seeded `world._prev_network_variant` cache, same pattern as
+  `_prev_transit_boost`) and, using the same `_awareness_offset` spreading mechanism as
+  `new_line`/`low_emission_zone`, schedules one `EventKind.TRANSIT_CHANGE` per affected agent:
+  `kind="network"` (payload `line`/`before_min`/`after_min`) for an employed agent whose metro
+  `home_zone -> job_zone` trip gets at least `min_gain_minutes` shorter, else `kind=
+  "network_access"` (payload `line`) drawn with probability `new_access_share(...)` of their
+  home zone, seeded deterministically by `(agent_id, variant)` (`_network_access_draw`).
+- **Prompts**: `prompts/state_builder.py`'s person block gets a `trip_to_work` field
+  (`prompts/buckets.py::trip_times_text`) whenever `network.agent_trip_minutes` returns
+  something; a district's `transit` field gets `", new {line} stations"` appended when it has
+  zones with `new_coverage > 0` in the active variant; `prompts/questions.py`'s `commute_mode`
+  mock prior blends 50/50 with an `exp(-minutes / 12)` prior over trip times when they exist.
+
 ## Providers (jev/)
 
 `JEV_PROVIDER=mock|typesafe|openrouter|vercel` (env wins over `scenario.jev.provider`).

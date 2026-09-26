@@ -61,6 +61,7 @@ from jevcity.prompts.buckets import (
     shops_trend_label,
     tourism_label,
     transit_bucket_text,
+    usual_trip_text,
     vacancy_text,
     work_text,
     years_in_home_text,
@@ -83,6 +84,7 @@ from jevcity.types import (
     World,
     question_key,
 )
+from jevcity.world import network
 
 _LIFE_EVENT_TEXT = {
     "new_child": "You are expecting a new child.",
@@ -180,19 +182,33 @@ def _event_sentence(event: Event, world: World) -> str:
         name = world.profiles[district].name if district in world.profiles else district
         wage = round(float(p.get("wage", 0.0)))
         return f"You received a job offer in {name} paying €{wage}/month."
+    v2 = world is not None and world.event_wording == "v2"
     if event.kind is EventKind.PAYDAY:
-        return "Today is payday."
+        return "Your monthly salary arrived today, as it does every month." if v2 else "Today is payday."
     if event.kind is EventKind.RENT_BURDEN:
         burden = round(float(p.get("burden", 0.0)) * 100)
         return f"Your rent now takes {burden}% of your income."
     if event.kind is EventKind.LIFE_EVENT:
         kind = str(p.get("kind", ""))
+        if kind == "partner" and world is not None and world.event_wording == "v2":
+            return "Your partner has come to live with you in your current home."
         return _LIFE_EVENT_TEXT.get(kind, "Something changed in your life today.")
     if event.kind is EventKind.SCHOOL_YEAR:
         return "The school year is starting for your children."
     if event.kind is EventKind.TRANSIT_CHANGE:
         kind = str(p.get("kind", ""))
-        if kind == "lez":
+        if kind == "network":
+            line = str(p.get("line", "new metro line"))
+            after = round(float(p.get("after_min", 0.0)))
+            before = round(float(p.get("before_min", 0.0)))
+            return (
+                f"The new {line} opened: your trip to work by metro now takes "
+                f"~{after} min instead of ~{before}."
+            )
+        if kind == "network_access":
+            line = str(p.get("line", "new metro line"))
+            return f"A new {line} station opened within walking distance of your home."
+        if kind in ("low_emission_zone", "lez"):  # triggers.py emits "low_emission_zone"
             return "A low-emission zone now applies near you."
         return "A new metro line opened near you."
     if event.kind is EventKind.SHOP_CLOSED:
@@ -201,6 +217,8 @@ def _event_sentence(event: Event, world: World) -> str:
     if event.kind is EventKind.TOURISM_PRESSURE:
         return "Tourist flats are increasing in your neighbourhood."
     if event.kind is EventKind.ARRIVED:
+        if world is not None and world.event_wording == "v2":
+            return "You arrived in Barcelona recently and have just settled into your current home."
         return "You just moved into Barcelona."
     return "Something happened today."
 
@@ -226,7 +244,42 @@ def _person_block(agent: Agent, world: World, tick: int) -> dict:
         # Mode + how long they've commuted this way (habit; see Agent.commute_since_tick) --
         # trip length is already implicit in the home district's `jobs` "commute" field.
         block["commute"] = f"{agent.commute_mode.value}, {commute_habit_text(tick, agent.commute_since_tick)}"
+    times = network.agent_trip_minutes(world, agent)
+    if times is not None and agent.commute_mode is not None:
+        usual = usual_trip_text(times, agent.commute_mode.value)
+        if usual is not None:
+            block["trip_to_work"] = usual
     return block
+
+
+def _network_line_label(world: World) -> str | None:
+    """The active TransitNetworkPolicy's label, or None when there isn't one currently active
+    (no access loaded, still on "base", or world._network_policy not set -- see
+    world/market.py's apply_policies)."""
+    if world.access is None or world.network_variant == "base":
+        return None
+    policy = getattr(world, "_network_policy", None)
+    if policy is None or policy.variant != world.network_variant:
+        return None
+    return policy.label
+
+
+def _district_has_new_network_coverage(did: DistrictId, world: World, variant: str) -> bool:
+    return any(
+        network.new_access_share(world, z.id, variant) > 0.0 for z in network.zones_in(world.access, did)
+    )
+
+
+def _append_network_note(text: str, did: DistrictId, world: World) -> str:
+    """Appends ", new {line} stations" (docs/TRANSIT_ACCESS.md section 2) when this district
+    has new coverage in the active network variant. A no-op (same string back) whenever
+    world.access is None, so district-only scenarios are unaffected."""
+    label = _network_line_label(world)
+    if label is None:
+        return text
+    if not _district_has_new_network_coverage(did, world, world.network_variant):
+        return text
+    return f"{text}, new {label} stations"
 
 
 def _transit_field(did: DistrictId, world: World, *, has_car: bool) -> str:
@@ -235,7 +288,7 @@ def _transit_field(did: DistrictId, world: World, *, has_car: bool) -> str:
     text = transit_bucket_text(profile.transit_score, state.transit_boost)
     if state.low_emission_zone and has_car:
         text += "; " + lez_note_text(state.car_cost_extra_monthly)
-    return text
+    return _append_network_note(text, did, world)
 
 
 def _district_block_generic(did: DistrictId, world: World) -> dict:
@@ -259,6 +312,7 @@ def _district_block_generic(did: DistrictId, world: World) -> dict:
     }
     if state.low_emission_zone:
         block["transit"] += "; " + lez_note_text(state.car_cost_extra_monthly)
+    block["transit"] = _append_network_note(block["transit"], did, world)
     tourism = tourism_label(state.tourist_units, state.housing_units)
     if tourism != "none":
         block["tourism"] = tourism

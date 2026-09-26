@@ -39,7 +39,7 @@ from jevcity.types import (
     Usage,
 )
 from jevcity.world import loader as world_loader
-from jevcity.world import market
+from jevcity.world import market, network
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +121,21 @@ async def run_simulation(
     agents_list = generator.generate_population(profiles, scenario.n_agents, rng)
     agents_by_id = {a.id: a for a in agents_list}
     world = market.init_world(profiles, agents_list)
+    world.event_wording = scenario.prompt.event_wording
+
+    # Zone-level transit network (docs/TRANSIT_ACCESS.md section 2): entirely opt-in via
+    # scenario.access_path, so a scenario that doesn't set it consumes no extra rng draws and
+    # produces no extra fields anywhere -- behaviour stays byte-identical to before this existed.
+    if scenario.access_path is not None:
+        access = network.load_access(scenario.access_path)
+        network.validate_access(access, {p.id for p in profiles})
+        world.access = access
+        world.network_variant = "base"
+        for agent in agents_list:
+            agent.home_zone = network.sample_home_zone(access, agent.home, rng)
+            if agent.employed and agent.job_district is not None:
+                agent.job_zone = network.sample_job_zone(access, agent.job_district, rng)
+            network.repair_commute_mode(world, agent)
 
     writer = runlog_writer.RunWriter(run_dir)
 

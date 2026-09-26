@@ -1,0 +1,13 @@
+extends: base_zones.yaml
+name: l9_central
+description: >-
+  The real L9/L10 central section (Zona Universitària to La Sagrera, 12 stations) opens at
+  tick 60, per docs/TRANSIT_ACCESS.md: agents whose rail commute gets meaningfully faster, or
+  who gain new walking-distance station access at home, are told about it over the following
+  transit_awareness_days.
+policies:
+  - type: transit_network
+    variant: l9_central
+    label: "L9"
+    start_tick: 60
+    min_gain_minutes: 3.0
